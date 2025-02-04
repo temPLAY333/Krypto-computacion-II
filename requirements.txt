@@ -1,0 +1,5 @@
+parameterized==0.8.1
+pytest==8.3.4
+pytest-asyncio==0.25.2
+pytest-mock==3.14.1
+winsdow-curses==2.4.1
