@@ -2,8 +2,7 @@ import time
 from puzzle.logic import KryptoLogic
 
 class ServerCompetitive:
-    def __init__(self, server_id, pipe_puzzle, pipe_message, max_players=5):
-        self.server_id = server_id
+    def __init__(self, pipe_puzzle, pipe_message, max_players=2):
         self.pipe_puzzle = pipe_puzzle  # Pipe para recibir nuevos puzzles del servidor principal
         self.pipe_message = pipe_message  # Pipe para enviar mensajes al servidor principal
         self.max_players = max_players

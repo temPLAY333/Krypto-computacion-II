@@ -49,3 +49,7 @@ class Messages:
 
     GAME_STATE = "game_state"
     
+    # Messages between servers
+    OK = "The game server have been served with a old puzzle"
+    KILL = "The game server have no more players"
+    ERROR = "The game server have an Indentified error"
