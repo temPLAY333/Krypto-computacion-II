@@ -2,10 +2,12 @@ import time
 import socket
 import threading
 import multiprocessing
+
 from multiprocessing import Queue
 from multiprocessing.connection import PipeConnection
+
 from puzzle.logic import KryptoLogic
-from common.social import Messages
+from common.social import PlayerServerMessages as PM
 
 class ServerClassic:
     def __init__(self, pipe_puzzle: Queue, pipe_message: PipeConnection):
@@ -15,9 +17,9 @@ class ServerClassic:
 
         # Comandos que el servidor puede recibir de los jugadores
         self.commands = {
-                Messages.SUBMIT_ANSWER: self.handle_posible_solution,
-                Messages.PLAYER_SURRENDER: self.handle_player_rend,
-                Messages.PLAYER_EXIT: self.handle_player_disconnect,
+                PM.SUBMIT_ANSWER: self.handle_posible_solution,
+                PM.PLAYER_SURRENDER: self.handle_player_rend,
+                PM.PLAYER_EXIT: self.handle_player_disconnect,
             }
         
         # Configuración del servidor
@@ -49,15 +51,15 @@ class ServerClassic:
         while True:
             client_socket, client_direccion = self.server_socket.accept()
             if self.players >= 8:
-                client_socket.sendall(Messages.SERVER_FULL.encode())
+                client_socket.sendall(PM.SERVER_FULL.encode())
                 client_socket.close()
             else:
                 print(f"Conexión aceptada de {client_direccion}")
-                client_socket.sendall(Messages.GREETING.encode())
+                client_socket.sendall(PM.GREETING.encode())
                 self.players += 1
                 self.check_game_status()
 
-                client_socket.sendall((Messages.NEW_PUZZLE + "|" + self.puzzle).encode())
+                client_socket.sendall((PM.NEW_PUZZLE + "|" + self.puzzle).encode())
 
                 # Crear un hilo para manejar el cliente
                 threading.Thread(target=self.handle_client_messages, args=(client_socket,)).start()
@@ -95,10 +97,10 @@ class ServerClassic:
         """Maneja la posible solución enviada por el jugador"""
         if KryptoLogic.verify_solution(solution, self.puzzle[-1]):
             self.solved += 1
-            client_socket.sendall((Messages.PUZZLE_RESULT + "|Correcto").encode())
+            client_socket.sendall((PM.PUZZLE_RESULT + "|Correcto").encode())
             self.check_game_status()
         else:
-            client_socket.sendall((Messages.PUZZLE_RESULT + "|Incorrecto").encode())
+            client_socket.sendall((PM.PUZZLE_RESULT + "|Incorrecto").encode())
 
     def handle_player_rend(self, client_socket):
         """Maneja el abandono de un jugador"""
@@ -122,9 +124,9 @@ class ServerClassic:
             # Limpiar estado y esperar nuevo puzzle
             self.solved = 0
             self.abandoned = 0
-            self.broadcast(Messages.NEW_PUZZLE + "|" + self.puzzle)  # Enviar nuevo puzzle a todos los jugadores
+            self.broadcast(PM.NEW_PUZZLE + "|" + self.puzzle)  # Enviar nuevo puzzle a todos los jugadores
         
-        self.broadcast(Messages.GAME_STATE + f"|{self.solved}|{self.abandoned}|{self.players}")
+        self.broadcast(PM.GAME_STATE + f"|{self.solved}|{self.abandoned}|{self.players}")
 
 
 # Ejemplo de uso del servidor clásico

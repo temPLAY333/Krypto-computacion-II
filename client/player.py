@@ -2,7 +2,7 @@ import time
 import curses
 import threading
 
-from common.social import Messages
+from common.social import PlayerServerMessages as SM
 
 class Player():
     def __init__(self, username, socket):
@@ -13,9 +13,9 @@ class Player():
 
         self.message_buffer = []
         self.commands = {
-            Messages.NEW_PUZZLE: self.handle_new_puzzle,
-            Messages.PUZZLE_RESULT: self.handle_puzzle_result,
-            Messages.GAME_STATE: self.handle_game_state,
+            SM.NEW_PUZZLE: self.handle_new_puzzle,
+            SM.PUZZLE_RESULT: self.handle_puzzle_result,
+            SM.GAME_STATE: self.handle_game_state,
         }
         
     def play(self):
@@ -79,18 +79,18 @@ class Player():
             curses.noecho()
 
             if user_input.lower() == "exit":
-                self.socket.sendall(Messages.PLAYER_EXIT.encode())
+                self.socket.sendall(SM.PLAYER_EXIT.encode())
                 self.exit_game()
                 break
             elif user_input.lower() == "quit":
-                self.socket.sendall(Messages.PLAYER_SURRENDER.encode())
+                self.socket.sendall(SM.PLAYER_SURRENDER.encode())
                 if test:
                     break
             else:
                 try:
                     # Envía la solución al servidor
                     solution = user_input  # Ejemplo: "2 + 2 * 5 - 10"
-                    self.socket.sendall(f"{Messages.SUBMIT_ANSWER}|{solution}".encode())
+                    self.socket.sendall(f"{SM.SUBMIT_ANSWER}|{solution}".encode())
                     if test:
                         break
                 except Exception as e:
@@ -107,7 +107,7 @@ class Player():
     def exit_game(self, *args):
         """Cierra la conexión con el servidor."""
         if self.socket:
-            self.socket.sendall(Messages.PLAYER_EXIT.encode())
+            self.socket.sendall(SM.PLAYER_EXIT.encode())
             self.socket.close()
         print("Goodbye!")
 

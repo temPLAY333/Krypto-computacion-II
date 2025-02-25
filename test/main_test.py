@@ -1,7 +1,7 @@
 import pytest
 import asyncio
 from unittest.mock import Mock, AsyncMock, patch
-from puzzle.main import MainServer
+from puzzle.main_server import MainServer
 from common.social import Messages
 
 @pytest.fixture(scope="function")

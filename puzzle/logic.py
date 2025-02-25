@@ -2,6 +2,12 @@ import random
 from collections import Counter
 
 class KryptoLogic:
+    _instance = None
+
+    def __new__(cls, *args, **kwargs):
+        if not cls._instance:
+            cls._instance = super(KryptoLogic, cls).__new__(cls, *args, **kwargs)
+        return cls._instance
     
     @staticmethod
     def suma(a, b):
@@ -51,7 +57,7 @@ class KryptoLogic:
         raise Exception("No se encontró una solución para el puzzle: " + str(puzzle))
 
     @staticmethod
-    def solucionar_puzzle(puzzle):
+    def solucionar_puzzle(puzzle) -> bool:
         a, b, c, d = puzzle[0], puzzle[1], puzzle[2], puzzle[3]
         answer = puzzle[4]
         combinaciones_A = [[[a, b], [c, d]], [[a, c], [b, d]], [[a, d], [b, c]], [[b, c], [a, d]], [[b, d], [a, c]], [[c, d], [a, b]]]
