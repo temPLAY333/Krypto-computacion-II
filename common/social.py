@@ -1,7 +1,9 @@
 class UserMainMessages:
+    TEST = "TEST_MESSAGE"
     LOGIN = "LOGIN"
     LIST_SERVERS = "LIST_SERVERS"
     CHOOSE_SERVER = "CHOOSE_SERVER"
+    OK = "Server choosen successfully"
     CREATE_SERVER = "CREATE_SERVER"
     # Agrega más mensajes de comando según sea necesario
 
@@ -36,7 +38,7 @@ class LogMessages:
 class InterfaceMessages:
     GREETING = "Welcome to the Krypto Game!\n"
     ASK_USERNAME = (
-        "Username must have between 8 and 20 characters. No special characters allowed."
+        "Username must have between 8 and 20 characters. No special characters allowed. "
         "Enter your username: "
     )
     INVALID_USERNAME = "That username is not allowed."

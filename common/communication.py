@@ -1,9 +1,9 @@
 import asyncio
 
 class Communication:
-    def __init__(self, log_enabled=True):
+    def __init__(self, log=None):
         self.commands = {}
-        self.log_enabled = log_enabled
+        self.log_object = log  # Store the log object
 
     def register_command(self, command, handler):
         """Registra un comando y su manejador."""
@@ -15,8 +15,10 @@ class Communication:
             del self.commands[command]
 
     def log(self, message):
-        """Imprime un mensaje de log si los logs están habilitados."""
-        if self.log_enabled:
+        """Uses the log object if provided, otherwise falls back to print if logs are enabled."""
+        if self.log_object:
+            self.log_object.info(message)  # Assuming the log object has an info method
+        else:
             print(message)
 
     def handle_sync_command(self, data):
@@ -32,14 +34,14 @@ class Communication:
         except Exception as e:
             self.log(f"Error receiving message: {e}")
 
-    async def handle_async_message(self, data, reader, writer):
+    async def handle_async_message(self, data, writer):
         """Recibe un mensaje de manera asincrónica y ejecuta el comando correspondiente."""
         try:
             if not data:
                 return
             command, *args = data.split("|")
             if command in self.commands:
-                await self.commands[command](reader, writer, *args)
+                await self.commands[command](writer, *args)
             else:
                 self.log(f"Unknown command: {command}")
         except Exception as e:
