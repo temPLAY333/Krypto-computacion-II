@@ -1,5 +1,4 @@
 import curses
-from common.social import InterfaceMessages as IM
 
 class UserInterface:
     def __init__(self, user):
@@ -59,113 +58,38 @@ class UserInterface:
 
             key = self.stdscr.getch()
             if key == ord('1'):
-                self.view_server_list()
+                self.user.view_server_list()
             elif key == ord('2'):
-                self.join_server()
+                self.user.join_server()
             elif key == ord('3'):
-                self.create_server()
+                self.user.create_server()
             elif key == ord('q'):
                 if self.get_confirmation("Are you sure you want to quit? (y/n)"):
                     break
 
     def view_server_list(self):
         """Muestra la lista de servidores activos."""
-        # Show "fetching" message
-        self.stdscr.clear()
-        self.stdscr.addstr(0, 0, "Fetching server list...")
-        self.stdscr.refresh()
-        
-        # Request server list from the main server
-        self.user.send_message(self.user.UM.LIST_SERVERS)
-        response = self.user.receive_message(4096) or "No response from server"
-        
-        # Display the response
         self.stdscr.clear()
         self.stdscr.addstr(0, 0, "Active Servers:")
-        
-        line_count = 2
-        if response == IM.NO_SERVERS:
-            self.stdscr.addstr(line_count, 0, "No active servers available.")
-            line_count += 1
-        else:
-            lines = response.strip().split('\n')
-            for i, line in enumerate(lines):
-                try:
-                    self.stdscr.addstr(i+2, 0, line)
-                    line_count = i+3
-                except:
-                    # Handle case where line might be too long
-                    continue
-        
-        self.stdscr.addstr(0, 0, "Press any key to continue...")
+        # Aquí se mostraría la lista de servidores activos
+        self.stdscr.addstr(1, 0, "Server 1")
+        self.stdscr.addstr(2, 0, "Server 2")
+        self.stdscr.addstr(3, 0, "Press any key to return to the main menu.")
         self.stdscr.refresh()
-        curses.echo()
-        input_str = self.stdscr.getstr(1, 0).decode('utf-8')
-        curses.noecho()
-        return input_str
+        self.stdscr.getch()
 
     def join_server(self):
         """Permite al usuario unirse a un servidor."""
-        # First show server list
-        self.view_server_list()
-        
-        # Get server ID
-        server_id = self.get_input(IM.ASK_SERVER_ID)
-        if not server_id:
-            return
-            
         self.stdscr.clear()
-        self.stdscr.addstr(0, 0, "Connecting to server...")
+        self.stdscr.addstr(0, 0, "Joining Server...")
         self.stdscr.refresh()
-        
-        # Send join request to the main server
-        self.user.send_message(self.user.UM.CHOOSE_SERVER + f"|{server_id}")
-        response = self.user.receive_message()
-        
-        # Handle response
-        if response.startswith(self.user.UM.OK):
-            _, name, server_game_port = response.split("|")
-            self.stdscr.clear()
-            self.stdscr.addstr(0, 0, f"Joining Server {name}...")
-            self.stdscr.refresh()
-            
-            # Handle the connection in the User class
-            self.user.connect_to_game_server(name, server_game_port.strip('.\n'))
-        else:
-            self.display_message(response)
-            self.stdscr.getch()
+        # Aquí se manejaría la lógica para unirse a un servidor
+        self.stdscr.getch()
 
     def create_server(self):
         """Permite al usuario crear un servidor nuevo."""
         self.stdscr.clear()
-        self.stdscr.addstr(0, 0, "Create New Server")
+        self.stdscr.addstr(0, 0, "Creating Server...")
         self.stdscr.refresh()
-        
-        # Get server details
-        name = self.get_input(IM.CREATE_SERVER_NAME)
-        if not name:
-            return
-            
-        self.stdscr.clear()
-        self.stdscr.addstr(0, 0, "Select Server Mode:")
-        self.stdscr.addstr(1, 0, "1. Classic")
-        self.stdscr.addstr(2, 0, "2. Competitive")
-        self.stdscr.refresh()
-        
-        while True:
-            key = self.stdscr.getch()
-            if key == ord('1'):
-                mode = "classic"
-                break
-            elif key == ord('2'):
-                mode = "competitive"
-                break
-        
-        self.stdscr.clear()
-        self.stdscr.addstr(0, 0, "Creating server...")
-        self.stdscr.refresh()
-        
-        # Send create request to the main server
-        self.user.send_message(self.user.UM.CREATE_SERVER + f"|{name}|{mode}")
-        response = self.user.receive_message()
-        self.display_message(response)
+        # Aquí se manejaría la lógica para crear un servidor nuevo
+        self.stdscr.getch()

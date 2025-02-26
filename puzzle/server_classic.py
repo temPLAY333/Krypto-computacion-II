@@ -1,138 +1,73 @@
 import time
-import socket
-import threading
-import multiprocessing
-
-from multiprocessing import Queue
-from multiprocessing.connection import PipeConnection
+import logging
 
 from puzzle.logic import KryptoLogic
+from puzzle.game_server import GameServer
 from common.social import PlayerServerMessages as PM
+from common.social import MainServerMessages as SM
 
-class ServerClassic:
-    def __init__(self, pipe_puzzle: Queue, pipe_message: PipeConnection):
-        # Puntos de comunicación (puentes) con el servidor principal
-        self.pipe_puzzle = pipe_puzzle
-        self.pipe_message = pipe_message
+# Configure logging
+logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
-        # Comandos que el servidor puede recibir de los jugadores
-        self.commands = {
-                PM.SUBMIT_ANSWER: self.handle_posible_solution,
-                PM.PLAYER_SURRENDER: self.handle_player_rend,
-                PM.PLAYER_EXIT: self.handle_player_disconnect,
-            }
+class ClassicServer(GameServer):
+    """Classic game server implementation
+    
+    Features:
+    - Supports 1 to 8 players
+    - Provides puzzles one at a time
+    - Players can surrender
+    - Gets puzzles one at a time from the queue
+    """
+    
+    def __init__(self, name, puzzle_queue, message_queue, port=5001, max_players=8):
+        super().__init__(name, puzzle_queue, message_queue, port, max_players)
         
-        # Configuración del servidor
-        self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.server_socket.bind(('localhost', 5001))  # Dirección y puerto
-        self.server_socket.listen(10)
-        
-        # Estado del servidor
-        self.players = 0
-        self.solved = 0
-        self.abandoned = 0
-        self.puzzle = 0
-        self.client_sockets = []
-        print("Servidor Clásico iniciado y esperando conexiones...")
-
-    def broadcast(self, message):
-        """Envía un mensaje a todos los jugadores."""
-        for player in self.client_sockets:
-            try:
-                player.sendall(message.encode())
-            except Exception as e:
-                print(f"Error broadcasting message: {e}")
-
-    def starting(self, test=False):
-        """Inicia el servidor clásico y espera las conexiones de los jugadores"""
-        self.puzzle = self.pipe_puzzle.get()
-        self.pipe_message.sendall("ok")
-
-        while True:
-            client_socket, client_direccion = self.server_socket.accept()
-            if self.players >= 8:
-                client_socket.sendall(PM.SERVER_FULL.encode())
-                client_socket.close()
-            else:
-                print(f"Conexión aceptada de {client_direccion}")
-                client_socket.sendall(PM.GREETING.encode())
-                self.players += 1
-                self.check_game_status()
-
-                client_socket.sendall((PM.NEW_PUZZLE + "|" + self.puzzle).encode())
-
-                # Crear un hilo para manejar el cliente
-                threading.Thread(target=self.handle_client_messages, args=(client_socket,)).start()
-                
-            time.sleep(1)
-            if test:
-                break
-
-    def handle_client_messages(self, client_socket, test=False):
-        """Maneja los mensajes recibidos del cliente y la conexión del jugador."""
-        self.client_sockets.append(client_socket)
-        client_socket.sendall(f"Nuevo puzzle: {self.puzzle}".encode())
-
-        while True:
-            try:
-                data = client_socket.recv(1024).decode()
-                if not data:
-                    break
-                command, *args = data.split("|")
-                if command in self.commands:
-                    self.commands[command](client_socket, *args)
-                else:
-                    print(f"Unknown command from client: {command}")
-            except Exception as e:
-                print(f"Error with player: {e}")
-                break
-            if test:
-                break
-
-        client_socket.close()
-        self.client_sockets.remove(client_socket)
-        self.handle_player_disconnect()
-
-    def handle_posible_solution(self, client_socket, solution):
-        """Maneja la posible solución enviada por el jugador"""
-        if KryptoLogic.verify_solution(solution, self.puzzle[-1]):
-            self.solved += 1
-            client_socket.sendall((PM.PUZZLE_RESULT + "|Correcto").encode())
-            self.check_game_status()
-        else:
-            client_socket.sendall((PM.PUZZLE_RESULT + "|Incorrecto").encode())
-
-    def handle_player_rend(self, client_socket):
-        """Maneja el abandono de un jugador"""
-        self.abandoned += 1
-        client_socket.sendall(("You gave up").encode())
-        self.check_game_status()
-
-    def handle_player_disconnect(self):
-        """Maneja la desconexión de un jugador"""
-        self.players -= 1
-        if self.players == 0:
-            self.pipe_message.sendall("vacio")  # Avisar al servidor principal que no hay jugadores
-        self.check_game_status()
-
-    def check_game_status(self):
-        """Verifica el estado del juego (todos los jugadores terminaron o se rindieron)"""
-        if self.solved + self.abandoned == self.players:
-            self.puzzle = self.pipe_puzzle.get() # Recibir un nuevo puzzle del servidor principal
-            self.pipe_message.sendall("ok")  # Avisar al servidor principal que el puzzle fue resuelto
-
-            # Limpiar estado y esperar nuevo puzzle
+        # Register surrender command (only available in classic mode)
+        self.communication.register_command(PM.PLAYER_SURRENDER, self.handle_player_rend)
+    
+    def get_initial_puzzles(self):
+        """Get the first puzzle from queue"""
+        try:
+            self.puzzle = self.puzzle_queue.get(timeout=5)
+            self.message_queue.put(f"{SM.OK}|{self.name}")
+            self.logger.info(f"Initial puzzle obtained: {self.puzzle}")
+        except Exception as e:
+            self.logger.error(f"Error getting initial puzzle: {e}")
+            raise
+    
+    def check_after_solution(self, client_socket):
+        """Check if all players have completed the puzzle"""
+        if self.check_round_completed():
+            self.get_new_puzzle()
+    
+    def check_round_completed(self):
+        """Check if the current round is completed"""
+        return self.solved + self.abandoned >= self.players and self.players > 0
+    
+    def get_new_puzzle(self):
+        """Get a new puzzle from the puzzle queue"""
+        try:
+            self.puzzle = self.puzzle_queue.get(timeout=5)
+            self.message_queue.put(f"{SM.OK}|{self.name}")
+            
+            # Reset round state
             self.solved = 0
             self.abandoned = 0
-            self.broadcast(PM.NEW_PUZZLE + "|" + self.puzzle)  # Enviar nuevo puzzle a todos los jugadores
-        
-        self.broadcast(PM.GAME_STATE + f"|{self.solved}|{self.abandoned}|{self.players}")
-
-
-# Ejemplo de uso del servidor clásico
-if __name__ == "__main__":
-    pipe_puzzle, pipe_message = multiprocessing.Pipe()
+            
+            # Send new puzzle to all clients
+            self.broadcast(f"{PM.NEW_PUZZLE}|{self.puzzle}")
+            self.logger.info(f"New puzzle obtained: {self.puzzle}")
+        except Exception as e:
+            self.logger.error(f"Error getting new puzzle: {e}")
+            self.message_queue.put(f"{SM.ERROR}|{self.name}|Failed to get new puzzle")
     
-    # Crear la instancia del servidor clásico
-    server = ServerClassic(pipe_puzzle, pipe_message)
-    server.starting()
+    def handle_player_rend(self, client_socket):
+        """Handle a player surrendering"""
+        self.logger.info("Player surrendered")
+        self.abandoned += 1
+        self.communication.send_message(client_socket, f"{PM.PUZZLE_RESULT}|You gave up")
+        
+        if self.check_round_completed():
+            self.get_new_puzzle()
+            
+        self.broadcast_game_state()

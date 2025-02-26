@@ -1,29 +1,9 @@
-class UserMainMessages:
-    TEST = "TEST_MESSAGE"
-    LOGIN = "LOGIN"
-    LIST_SERVERS = "LIST_SERVERS"
-    CHOOSE_SERVER = "CHOOSE_SERVER"
-    OK = "Server choosen successfully"
-    CREATE_SERVER = "CREATE_SERVER"
-    # Agrega más mensajes de comando según sea necesario
-
-class MainServerMessages:
-    OK = "The game server has been served with an old puzzle"
-    KILL = "The game server has no more players"
-    ERROR = "The game server has an unidentified error"
-
-class PlayerServerMessages:
-    # PLayer Messages
-    SEND_PUZZLE = "send_puzzle"
-    NEW_PUZZLE = "new_puzzle"
-    SUBMIT_ANSWER = "submit_answer"
-    PLAYER_SURRENDER = "player_surrender"
-    PLAYER_EXIT = "player_exit"
-
-    # Server Messages
-    GAME_STATE = "game_state"
-
 class LogMessages:
+    """Logging-related messages"""
+    ERROR = "ERROR"
+    WARNING = "WARNING"
+    INFO = "INFO"
+    DEBUG = "DEBUG"
     SERVER_STARTED = "Servidor principal definido."
     SERVER_RUNNING = "Servidor principal ejecutándose..."
     SERVER_CLOSED = "Servidor principal cerrado."
@@ -35,15 +15,22 @@ class LogMessages:
     SERVER_ERROR = "Error en el servidor con ID {pid}."
     UNKNOWN_MESSAGE = "Error en el mensaje del proceso {pid}"
 
+class UserMainMessages:
+    """Messages between the user and main server"""
+    TEST = "test"
+    LOGIN = "login"
+    LIST_SERVERS = "list"
+    CHOOSE_SERVER = "join"
+    CREATE_SERVER = "create"
+    OK = "success"
+
 class InterfaceMessages:
-    GREETING = "Welcome to the Krypto Game!\n"
-    ASK_USERNAME = (
-        "Username must have between 8 and 20 characters. No special characters allowed. "
-        "Enter your username: "
-    )
-    INVALID_USERNAME = "That username is not allowed."
-    LOGIN_SUCCESS = "Login successful!\n"
-    LOGIN_ERROR = "Login failed. Try again.\n"
+    """Messages shown in the user interface"""
+    GREETING = "Welcome to Krypto Game!"
+    ASK_USERNAME = "Please enter your username (8-20 alphanumeric characters): "
+    INVALID_USERNAME = "Invalid username format! Please use 8-20 alphanumeric characters."
+    LOGIN_SUCCESS = "Login successful!"
+    LOGIN_ERROR = "Login failed. Please try again."
     MAIN_MENU = (
         "Main Menu:\n"
         "1. View servers\n"
@@ -53,14 +40,32 @@ class InterfaceMessages:
         "Enter your choice: "
     )
     INVALID_OPTION = "Invalid option. Please try again.\n"
-    NO_SERVERS = "No servers are available.\n"
+    NO_SERVERS = "No active servers available."
     ASK_SERVER_ID = "Enter the server ID to join: "
-    SERVER_JOIN_SUCCESS = "You joined the server successfully!\n"
-    SERVER_JOIN_FAIL = "Failed to join the server.\n"
-    CREATE_SERVER_NAME = "Enter a name for your server: "
-    CREATE_SERVER_MODE = "Enter the game mode (classic or competitive): "
-    CREATE_SERVER_ERROR = "Invalid game mode. Try again.\n"
+    SERVER_JOIN_SUCCESS = "Successfully joined the server!"
+    SERVER_JOIN_FAIL = "Failed to join server. Please check the server ID and try again."
+    CREATE_SERVER_NAME = "Enter server name: "
+    CREATE_SERVER_MODE = "Enter server mode (classic or competitive): "
+    CREATE_SERVER_ERROR = "Invalid server mode. Please use 'classic' or 'competitive'."
     CREATE_SERVER_SUCCESS = "Server created successfully with ID: "
     GOODBYE = "Goodbye! Thanks for playing.\n"
-    SERVER_FULL = "Server is full. Try again later.\n"
+    SERVER_FULL = "Server is full. Please try another server."
     PUZZLE_RESULT = "Your solution was: "  # Correct or incorrect
+
+class PlayerServerMessages:
+    """Messages between player and game server"""
+    GREETING = "welcome"
+    SERVER_FULL = "server_full"
+    NEW_PUZZLE = "puzzle"
+    PUZZLE_RESULT = "result"
+    GAME_STATE = "state"
+    SUBMIT_ANSWER = "solution"
+    PLAYER_SURRENDER = "quit"
+    PLAYER_EXIT = "exit"
+
+class MainServerMessages:
+    """Messages between game server and main server"""
+    OK = "ok"
+    ERROR = "error"
+    KILL = "kill"
+    EMPTY = "empty"

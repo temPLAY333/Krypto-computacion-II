@@ -1,6 +1,6 @@
 import unittest
 from unittest.mock import patch, MagicMock, call
-from puzzle.server_classic import ServerClassic
+from puzzle.game_server import ServerClassic
 from common.social import Messages
 
 class TestServerClassic(unittest.TestCase):
@@ -34,7 +34,7 @@ class TestServerClassic(unittest.TestCase):
         self.server.server_socket.accept.return_value = (mock_socket, "test-direction")
         self.pipe_puzzle.get.return_value = "test puzzle"
 
-        self.server.starting(test=True)
+        self.server.start(test=True)
 
         self.pipe_puzzle.get.assert_called_once()
         self.pipe_message.sendall.assert_called_with("ok")
@@ -56,7 +56,7 @@ class TestServerClassic(unittest.TestCase):
         self.server.server_socket.accept.return_value = (mock_socket, "test-direction")
         self.pipe_puzzle.get.return_value = "test puzzle"
 
-        self.server.starting(test=True)
+        self.server.start(test=True)
 
         self.pipe_puzzle.get.assert_called_once()
         self.pipe_message.sendall.assert_called_with("ok")
