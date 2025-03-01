@@ -1,5 +1,6 @@
 import time
 import logging
+from queue import Queue
 
 from puzzle.logic import KryptoLogic
 from puzzle.game_server import GameServer
@@ -16,7 +17,7 @@ class CompetitiveServer(GameServer):
     - Gets all puzzles at once from the queue
     """
     
-    def __init__(self, name, puzzle_queue, message_queue, port=5001, puzzle_count=5):
+    def __init__(self, name:str, puzzle_queue:Queue, message_queue:Queue, port:int, puzzle_count:int): 
         # Override max_players to be exactly 2 for competitive mode
         super().__init__(name, puzzle_queue, message_queue, port, max_players=2)
         

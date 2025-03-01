@@ -1,5 +1,6 @@
 import time
 import logging
+from queue import Queue
 
 from puzzle.logic import KryptoLogic
 from puzzle.game_server import GameServer
@@ -19,7 +20,7 @@ class ClassicServer(GameServer):
     - Gets puzzles one at a time from the queue
     """
     
-    def __init__(self, name, puzzle_queue, message_queue, port=5001, max_players=8):
+    def __init__(self, name:str, puzzle_queue:Queue, message_queue:Queue, port:int, max_players:int):
         super().__init__(name, puzzle_queue, message_queue, port, max_players)
         
         # Register surrender command (only available in classic mode)

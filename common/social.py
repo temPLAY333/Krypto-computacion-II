@@ -23,6 +23,19 @@ class UserMainMessages:
     CHOOSE_SERVER = "join"
     CREATE_SERVER = "create"
     OK = "success"
+    
+    # Add all missing message types that are used in user.py
+    LOGIN_SUCCESS = "login_success"
+    LOGIN_FAIL = "login_fail"
+    SERVER_LIST = "server_list"
+    JOIN_SUCCESS = "join_success"
+    JOIN_FAIL = "join_fail"
+    CREATE_SUCCESS = "create_success"
+    CREATE_FAIL = "create_fail"
+    ERROR = "error"
+    LIST = "list"
+    CREATE = "create" 
+    LOGOUT = "logout"
 
 class InterfaceMessages:
     """Messages shown in the user interface"""
@@ -59,13 +72,19 @@ class PlayerServerMessages:
     NEW_PUZZLE = "puzzle"
     PUZZLE_RESULT = "result"
     GAME_STATE = "state"
+
+    # Player Messages
     SUBMIT_ANSWER = "solution"
     PLAYER_SURRENDER = "quit"
     PLAYER_EXIT = "exit"
+
+    # Server Competitive Messages
+    GAME_START = "start"
+    GAME_COMPLETED = "complete"
+    GAME_RESULTS = "results"
 
 class MainServerMessages:
     """Messages between game server and main server"""
     OK = "ok"
     ERROR = "error"
     KILL = "kill"
-    EMPTY = "empty"

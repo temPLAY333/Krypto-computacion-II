@@ -16,12 +16,12 @@ logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(name)s - %(leve
 class GameServer(ABC):
     """Abstract base class for all game server types"""
     
-    def __init__(self, name, puzzle_queue, message_queue, port=5001, max_players=8):
+    def __init__(self, name:str, puzzle_queue:Queue, message_queue:Queue, port:int, max_players:int):
         self.name = name
-        self.port = port
-        self.max_players = max_players
         self.puzzle_queue = puzzle_queue
         self.message_queue = message_queue
+        self.port = port
+        self.max_players = max_players
         
         # Server state
         self.players = 0
@@ -140,7 +140,7 @@ class GameServer(ABC):
         self.players -= 1
         if self.players == 0:
             self.logger.info("No players left, notifying main server")
-            self.message_queue.put(f"{SM.EMPTY}|{self.name}")
+            self.message_queue.put(f"{SM.KILL}|{self.name}")
             
         self.broadcast_game_state()
     

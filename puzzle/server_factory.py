@@ -1,25 +1,24 @@
 import logging
 import multiprocessing
-import threading
 from queue import Queue
 
-from puzzle.game_server import ClassicServer, CompetitiveServer
+from puzzle.server_classic import ClassicServer
+from puzzle.server_competitive import CompetitiveServer
 
 logger = logging.getLogger(__name__)
 
 class ServerFactory:
     """Factory class for creating different types of game servers"""
     
-    def __init__(self, puzzle_queue, message_queue):
+    def __init__(self, puzzle_queue:Queue, message_queue:Queue):
         """Initialize the server factory"""
         self.puzzle_queue = puzzle_queue
         self.message_queue = message_queue
         self.next_port = 5001
-        self.servers = {}  # Store active servers
         
         logger.info("Server factory initialized")
     
-    def create_server(self, name, mode, max_players=8):
+    def create_server(self, name, mode, number):
         """Create a new server of the specified type"""
         try:
             # Create server instance based on mode
@@ -28,37 +27,19 @@ class ServerFactory:
                 logger.error(f"Invalid server mode: {mode}")
                 return None
             
-            # Set up communication queues
-            server_puzzle_queue = multiprocessing.Queue()
+            # Set up port
+            port = self.get_next_port()
             
             # Create the server in a new process
-            port = self.get_next_port()
             process = multiprocessing.Process(
                 target=self.run_server,
-                args=(server_class, name, server_puzzle_queue, self.message_queue, port, max_players)
+                args=(server_class, name, self.puzzle_queue, self.message_queue, port, int(number))
             )
             process.daemon = True
             process.start()
             
-            server_id = process.pid
-            self.servers[server_id] = {
-                'process': process,
-                'puzzle_queue': server_puzzle_queue,
-                'name': name,
-                'mode': mode,
-                'port': port
-            }
-            
-            # Start a thread to feed puzzles to the server
-            puzzle_feeder = threading.Thread(
-                target=self.feed_puzzles,
-                args=(self.puzzle_queue, server_puzzle_queue),
-                daemon=True
-            )
-            puzzle_feeder.start()
-            
-            logger.info(f"Created {mode} server '{name}' with ID {server_id} on port {port}")
-            return server_id
+            logger.info(f"Created {mode} server '{name}' on port {port}")
+            return process.pid, port
             
         except Exception as e:
             logger.error(f"Failed to create server: {e}")
@@ -81,20 +62,10 @@ class ServerFactory:
         return port
     
     @staticmethod
-    def run_server(server_class, name, puzzle_queue, message_queue, port, max_players):
+    def run_server(server_class, name, puzzle_queue, message_queue, port, number):
         """Run a server in a separate process"""
         try:
-            server = server_class(name, puzzle_queue, message_queue, port, max_players)
+            server = server_class(name, puzzle_queue, message_queue, port, number)
             server.start()
         except Exception as e:
             logger.error(f"Server process error: {e}")
-    
-    @staticmethod
-    def feed_puzzles(source_queue, target_queue):
-        """Feed puzzles from the main queue to the server queue"""
-        try:
-            while True:
-                puzzle = source_queue.get()
-                target_queue.put(puzzle)
-        except Exception as e:
-            logger.error(f"Error feeding puzzles: {e}")
