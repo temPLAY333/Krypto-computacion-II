@@ -141,8 +141,8 @@ class GameServer(ABC):
         if self.players == 0:
             self.logger.info("No players left, notifying main server")
             self.message_queue.put(f"{SM.KILL}|{self.name}")
-            
-        self.broadcast_game_state()
+        else:
+            self.broadcast_game_state()
     
     def cleanup(self):
         """Clean up server resources"""

@@ -320,16 +320,21 @@ class UserInterface:
             self.display_message("No servers available.", self.COLOR_WARNING)
             return
         
-        # Parse server IDs from the formatted strings
-        server_ids = []
+        # Parse server details from the formatted strings
+        server_details = []
         for server_str in server_list:
-            # Extract server ID from string like "ID: abc123, Name: ..."
-            id_part = server_str.split(',')[0].strip()
+            # Extract server ID and name from string like "ID: abc123, Name: ..., Mode: ..."
+            parts = server_str.split(',')
+            id_part = parts[0].strip()
+            name_part = parts[1].strip()
+            mode_part = parts[2].strip()
             server_id = id_part.replace("ID:", "").strip()
-            server_ids.append(server_id)
+            server_name = name_part.replace("Name:", "").strip()
+            server_mode = mode_part.replace("Mode:", "").strip()
+            server_details.append((server_id, f"{server_name} ({server_mode})"))
         
         # Build dictionary of server options
-        options = {str(i): server_ids[i-1] for i in range(1, len(server_ids) + 1)}
+        options = {str(i): server_details[i-1][1] for i in range(1, len(server_details) + 1)}
         options["c"] = "Cancel"
         
         choice = self.menu(
@@ -341,7 +346,7 @@ class UserInterface:
         if choice == "c":
             return
         
-        server_id = options[choice]
+        server_id = server_details[int(choice) - 1][0]
         self.user.join_server(server_id)
     
     def create_server(self):

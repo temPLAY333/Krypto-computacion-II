@@ -1,137 +1,153 @@
-import time
 import logging
-from queue import Queue
+import asyncio
+import time
+from common.social import ServerClientMessages as SCM
+from puzzle.abstract_game_server import AbstractGameServer
 
-from puzzle.logic import KryptoLogic
-from puzzle.game_server import GameServer
-from common.social import PlayerServerMessages as PM
-from common.social import MainServerMessages as SM
-
-class CompetitiveServer(GameServer):
-    """Competitive game server with additional rules
+class CompetitiveServer(AbstractGameServer):
+    """Implementation of a competitive game server"""
     
-    Features:
-    - Supports exactly 2 players
-    - Set number of puzzles agreed by both players
-    - Players cannot surrender (but can abandon)
-    - Gets all puzzles at once from the queue
-    """
-    
-    def __init__(self, name:str, puzzle_queue:Queue, message_queue:Queue, port:int, puzzle_count:int): 
-        # Override max_players to be exactly 2 for competitive mode
-        super().__init__(name, puzzle_queue, message_queue, port, max_players=2)
+    def __init__(self, name, port, puzzle_queue, message_queue):
+        super().__init__(name, port, puzzle_queue, message_queue)
+        self.mode = "competitive"
+        self.logger = logging.getLogger(f"CompetitiveServer-{name}")
+        self.logger.info(f"Competitive server '{name}' initialized on port {port}")
         
-        # Competitive specific settings
-        self.puzzle_count = puzzle_count
-        self.puzzles = []
-        self.current_puzzle_index = 0
-        self.player_scores = {}  # Track scores per player
-        self.player_status = {}  # Track completion status per player
-        self.start_time = None
-        self.game_completed = False
-    
+        # Competitive-specific attributes
+        self.scores = {}  # Track player scores
+        self.round_start_time = None
+        self.round_duration = 60  # 60 seconds per round
+        self.current_round = 0
+        
     def get_initial_puzzles(self):
-        """Get all puzzles at once for competitive mode"""
+        """Get initial puzzles for competitive mode - we need several"""
         try:
-            # Get all puzzles upfront
-            self.puzzles = []
-            for _ in range(self.puzzle_count):
-                puzzle = self.puzzle_queue.get(timeout=5)
-                self.puzzles.append(puzzle)
-            
-            # Set the first puzzle as current
-            self.puzzle = self.puzzles[self.current_puzzle_index]
-            self.message_queue.put(f"{SM.OK}|{self.name}")
-            self.logger.info(f"Got {len(self.puzzles)} puzzles for competitive mode")
+            puzzles = []
+            # Try to get 5 puzzles
+            for _ in range(5):
+                if not self.puzzle_queue.empty():
+                    puzzles.append(self.puzzle_queue.get())
+                    
+            return puzzles if puzzles else None
         except Exception as e:
-            self.logger.error(f"Error getting competitive puzzles: {e}")
-            raise
-    
-    def handle_new_connection(self, client_socket, client_address):
-        """Override to track player scores and status"""
-        # Use parent implementation first
-        super().handle_new_connection(client_socket, client_address)
-        
-        # Initialize player tracking (using socket as player identifier)
-        player_id = str(id(client_socket))
-        self.player_scores[player_id] = 0
-        self.player_status[player_id] = {"current_puzzle": 0, "completed": False}
-        
-        # Start the game if we have two players
-        if self.players == 2 and not self.start_time:
-            self.start_time = time.time()
-            self.broadcast(f"{PM.GAME_START}|{self.puzzle_count}")
-    
-    def check_after_solution(self, client_socket):
-        """Check if player has completed all puzzles"""
-        player_id = str(id(client_socket))
-        
-        # Update player's score and status
-        self.player_scores[player_id] += 1
-        current_score = self.player_scores[player_id]
-        
-        # Check if this player has completed all puzzles
-        if current_score >= self.puzzle_count:
-            self.player_status[player_id]["completed"] = True
-            self.communication.send_message(client_socket, f"{PM.GAME_COMPLETED}|{current_score}")
+            self.logger.error(f"Error getting initial puzzles: {e}")
+            return None
             
-            # Check if game is over
-            if self.check_game_completed():
-                self.end_game()
-        else:
-            # Move this player to their next puzzle
-            next_puzzle_index = current_score
-            if next_puzzle_index < len(self.puzzles):
-                next_puzzle = self.puzzles[next_puzzle_index]
-                self.communication.send_message(client_socket, f"{PM.NEW_PUZZLE}|{next_puzzle}")
-    
-    def check_game_completed(self):
-        """Check if the competitive game is completed"""
-        # Game is completed when any player finishes all puzzles or all players have left
-        if self.players == 0:
-            return True
-            
-        for status in self.player_status.values():
-            if status["completed"]:
-                return True
+    def check_after_solution(self, solution):
+        """Check what happens after a solution in competitive mode"""
+        # In competitive, we might wait for round to end
+        # For now, just get the next puzzle
+        return self.get_next_puzzle()
+        
+    async def process_client_message(self, client_id, message):
+        """Process messages from clients in competitive mode"""
+        try:
+            parts = message.split('|')
+            if not parts:
+                return
                 
-        return False
-    
-    def end_game(self):
-        """End the competitive game and announce results"""
-        if self.game_completed:
-            return
+            command = parts[0]
+            args = parts[1:] if len(parts) > 1 else []
             
-        self.game_completed = True
-        game_duration = time.time() - self.start_time if self.start_time else 0
-        
-        # Find winner
-        winner_id = None
-        highest_score = -1
-        
-        for player_id, score in self.player_scores.items():
-            if score > highest_score:
-                highest_score = score
-                winner_id = player_id
-        
-        # Announce results
-        results = f"{PM.GAME_RESULTS}|{game_duration:.2f}"
-        for player_id, score in self.player_scores.items():
-            results += f"|{player_id},{score}"
-            
-        self.broadcast(results)
-        self.message_queue.put(f"{SM.GAME_COMPLETED}|{self.name}|{game_duration:.2f}")
+            if command == SCM.GET_PUZZLE:
+                # Send current puzzle to client with round info
+                if self.current_puzzle:
+                    time_left = self.get_round_time_left()
+                    await self.send_message_to_client(
+                        client_id, 
+                        f"{SCM.PUZZLE}|{self.current_puzzle}|{self.current_round}|{time_left}"
+                    )
+                else:
+                    await self.send_message_to_client(client_id, f"{SCM.ERROR}|No puzzle available")
+                    
+            elif command == SCM.SUBMIT_SOLUTION:
+                # Process solution submission with scoring
+                if len(args) < 2:
+                    await self.send_message_to_client(client_id, f"{SCM.ERROR}|Invalid solution format")
+                    return
+                    
+                solution = args[0]
+                player_name = args[1]
+                
+                # Initialize player score if needed
+                if player_name not in self.scores:
+                    self.scores[player_name] = 0
+                
+                # Validate solution
+                if self.validate_solution(solution):
+                    # Award points based on time left
+                    time_left = self.get_round_time_left()
+                    points = max(1, int(time_left / 5))  # More points for faster solutions
+                    self.scores[player_name] += points
+                    
+                    await self.send_message_to_client(
+                        client_id, 
+                        f"{SCM.SOLUTION_CORRECT}|{points}|{self.scores[player_name]}"
+                    )
+                    
+                    # Broadcast updated scores
+                    await self.broadcast_message(
+                        f"{SCM.SCORE_UPDATE}|{player_name}|{self.scores[player_name]}"
+                    )
+                    
+                    # Move to next puzzle if we're the first to solve
+                    if self.should_advance_puzzle():
+                        new_puzzle = self.check_after_solution(solution)
+                        if new_puzzle:
+                            self.start_new_round()
+                            await self.broadcast_message(
+                                f"{SCM.NEW_PUZZLE}|{new_puzzle}|{self.current_round}|{self.round_duration}"
+                            )
+                else:
+                    # Penalty for wrong solution
+                    self.scores[player_name] = max(0, self.scores[player_name] - 1)
+                    await self.send_message_to_client(
+                        client_id, 
+                        f"{SCM.SOLUTION_INCORRECT}|{self.scores[player_name]}"
+                    )
+                
+            # Add more commands as needed
+                
+        except Exception as e:
+            self.logger.error(f"Error processing message from {client_id}: {e}")
     
-    def cleanup_client(self, client_socket):
-        """Override to handle player leaving competitive game"""
-        player_id = str(id(client_socket))
+    def start_new_round(self):
+        """Start a new round"""
+        self.current_round += 1
+        self.round_start_time = time.time()
+        self.logger.info(f"Starting round {self.current_round}")
         
-        # Mark this player's puzzles as abandoned
-        self.abandoned += 1
+    def get_round_time_left(self):
+        """Get time left in current round"""
+        if not self.round_start_time:
+            self.round_start_time = time.time()
+            
+        elapsed = time.time() - self.round_start_time
+        return max(0, self.round_duration - elapsed)
         
-        # Call parent implementation
-        super().cleanup_client(client_socket)
-        
-        # Check if game should end
-        if self.check_game_completed():
-            self.end_game()
+    def should_advance_puzzle(self):
+        """Check if we should advance to the next puzzle"""
+        # In this implementation, advance if someone solves it
+        return True
+            
+    async def send_message_to_client(self, client_id, message):
+        """Send a message to a specific client"""
+        if client_id in self.clients:
+            writer = self.clients[client_id]["writer"]
+            writer.write(message.encode())
+            await writer.drain()
+            self.logger.debug(f"Sent to {client_id}: {message}")
+            
+    async def broadcast_message(self, message):
+        """Send a message to all connected clients"""
+        for client_id, client_data in self.clients.items():
+            writer = client_data["writer"]
+            writer.write(message.encode())
+            await writer.drain()
+        self.logger.debug(f"Broadcast: {message}")
+            
+    def validate_solution(self, solution):
+        """Validate a solution (simplified implementation)"""
+        # In a real implementation, this would check the solution against the puzzle
+        # For now, we'll just return True for testing
+        return True

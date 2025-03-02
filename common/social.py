@@ -88,3 +88,14 @@ class MainServerMessages:
     OK = "ok"
     ERROR = "error"
     KILL = "kill"
+
+class ServerClientMessages:
+    """Messages between game servers and clients"""
+    GET_PUZZLE = "get_puzzle"
+    PUZZLE = "puzzle"
+    SUBMIT_SOLUTION = "submit_solution"
+    SOLUTION_CORRECT = "solution_correct"
+    SOLUTION_INCORRECT = "solution_incorrect"
+    NEW_PUZZLE = "new_puzzle"
+    SCORE_UPDATE = "score_update"
+    ERROR = "error"

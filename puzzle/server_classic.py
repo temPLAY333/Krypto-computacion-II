@@ -1,74 +1,92 @@
-import time
 import logging
-from queue import Queue
+import asyncio
+from common.social import ServerClientMessages as SCM
+from puzzle.abstract_game_server import AbstractGameServer
 
-from puzzle.logic import KryptoLogic
-from puzzle.game_server import GameServer
-from common.social import PlayerServerMessages as PM
-from common.social import MainServerMessages as SM
-
-# Configure logging
-logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-
-class ClassicServer(GameServer):
-    """Classic game server implementation
+class ClassicServer(AbstractGameServer):
+    """Implementation of a classic game server"""
     
-    Features:
-    - Supports 1 to 8 players
-    - Provides puzzles one at a time
-    - Players can surrender
-    - Gets puzzles one at a time from the queue
-    """
-    
-    def __init__(self, name:str, puzzle_queue:Queue, message_queue:Queue, port:int, max_players:int):
-        super().__init__(name, puzzle_queue, message_queue, port, max_players)
+    def __init__(self, name, port, puzzle_queue, message_queue, debug=False):
+        super().__init__(name, port, puzzle_queue, message_queue, debug)
+        self.mode = "classic"
+        self.logger = logging.getLogger(f"ClassicServer-{name}")
+        self.logger.setLevel(logging.DEBUG if debug else logging.INFO)
+        self.logger.info(f"Classic server '{name}' initialized on port {port}")
         
-        # Register surrender command (only available in classic mode)
-        self.communication.register_command(PM.PLAYER_SURRENDER, self.handle_player_rend)
-    
     def get_initial_puzzles(self):
-        """Get the first puzzle from queue"""
+        """Get initial puzzles for the classic mode - just one is enough"""
         try:
-            self.puzzle = self.puzzle_queue.get(timeout=5)
-            self.message_queue.put(f"{SM.OK}|{self.name}")
-            self.logger.info(f"Initial puzzle obtained: {self.puzzle}")
+            if not self.puzzle_queue.empty():
+                return [self.puzzle_queue.get()]
+            return None
         except Exception as e:
-            self.logger.error(f"Error getting initial puzzle: {e}")
-            raise
-    
-    def check_after_solution(self, client_socket):
-        """Check if all players have completed the puzzle"""
-        if self.check_round_completed():
-            self.get_new_puzzle()
-    
-    def check_round_completed(self):
-        """Check if the current round is completed"""
-        return self.solved + self.abandoned >= self.players and self.players > 0
-    
-    def get_new_puzzle(self):
-        """Get a new puzzle from the puzzle queue"""
-        try:
-            self.puzzle = self.puzzle_queue.get(timeout=5)
-            self.message_queue.put(f"{SM.OK}|{self.name}")
+            self.logger.error(f"Error getting initial puzzles: {e}")
+            return None
             
-            # Reset round state
-            self.solved = 0
-            self.abandoned = 0
-            
-            # Send new puzzle to all clients
-            self.broadcast(f"{PM.NEW_PUZZLE}|{self.puzzle}")
-            self.logger.info(f"New puzzle obtained: {self.puzzle}")
-        except Exception as e:
-            self.logger.error(f"Error getting new puzzle: {e}")
-            self.message_queue.put(f"{SM.ERROR}|{self.name}|Failed to get new puzzle")
-    
-    def handle_player_rend(self, client_socket):
-        """Handle a player surrendering"""
-        self.logger.info("Player surrendered")
-        self.abandoned += 1
-        self.communication.send_message(client_socket, f"{PM.PUZZLE_RESULT}|You gave up")
+    def check_after_solution(self, solution):
+        """Check what happens after a solution is submitted in classic mode"""
+        # In classic mode, just get a new puzzle
+        return self.get_next_puzzle()
         
-        if self.check_round_completed():
-            self.get_new_puzzle()
+    async def process_client_message(self, client_id, message):
+        """Process messages from clients in classic mode"""
+        try:
+            parts = message.split('|')
+            if not parts:
+                return
+                
+            command = parts[0]
+            args = parts[1:] if len(parts) > 1 else []
             
-        self.broadcast_game_state()
+            if command == SCM.GET_PUZZLE:
+                # Send current puzzle to client
+                if self.current_puzzle:
+                    await self.send_message_to_client(client_id, f"{SCM.PUZZLE}|{self.current_puzzle}")
+                else:
+                    await self.send_message_to_client(client_id, f"{SCM.ERROR}|No puzzle available")
+                    
+            elif command == SCM.SUBMIT_SOLUTION:
+                # Process solution submission
+                if len(args) < 1:
+                    await self.send_message_to_client(client_id, f"{SCM.ERROR}|Invalid solution format")
+                    return
+                    
+                solution = args[0]
+                # Validate solution (simplified)
+                if self.validate_solution(solution):
+                    await self.send_message_to_client(client_id, f"{SCM.SOLUTION_CORRECT}")
+                    
+                    # Get next puzzle
+                    new_puzzle = self.check_after_solution(solution)
+                    if new_puzzle:
+                        # Broadcast new puzzle to all clients
+                        await self.broadcast_message(f"{SCM.NEW_PUZZLE}|{new_puzzle}")
+                else:
+                    await self.send_message_to_client(client_id, f"{SCM.SOLUTION_INCORRECT}")
+                    
+            # Add more commands as needed
+                
+        except Exception as e:
+            self.logger.error(f"Error processing message from {client_id}: {e}")
+            
+    async def send_message_to_client(self, client_id, message):
+        """Send a message to a specific client"""
+        if client_id in self.clients:
+            writer = self.clients[client_id]["writer"]
+            writer.write(message.encode())
+            await writer.drain()
+            self.logger.debug(f"Sent to {client_id}: {message}")
+            
+    async def broadcast_message(self, message):
+        """Send a message to all connected clients"""
+        for client_id, client_data in self.clients.items():
+            writer = client_data["writer"]
+            writer.write(message.encode())
+            await writer.drain()
+        self.logger.debug(f"Broadcast: {message}")
+            
+    def validate_solution(self, solution):
+        """Validate a solution (simplified implementation)"""
+        # In a real implementation, this would check the solution against the puzzle
+        # For now, we'll just return True for testing
+        return True

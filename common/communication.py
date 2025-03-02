@@ -1,10 +1,12 @@
+import logging
 import asyncio
 import socket
+from .debug_utils import dump_message_info
 
 class Communication:
-    def __init__(self, log=None):
+    def __init__(self, logger=None):
         self.commands = {}
-        self.log_object = log  # Store the log object
+        self.logger = logger or logging.getLogger(__name__)
 
     def register_command(self, command, handler):
         """Registra un comando y su manejador."""
@@ -21,8 +23,8 @@ class Communication:
 
     def log(self, message):
         """Uses the log object if provided, otherwise falls back to print if logs are enabled."""
-        if self.log_object:
-            self.log_object.info(message)  # Assuming the log object has an info method
+        if self.logger:
+            self.logger.info(message)  # Assuming the log object has an info method
         else:
             print(message)
 
@@ -39,18 +41,43 @@ class Communication:
         except Exception as e:
             self.log(f"Error processing message: {e}")
 
-    async def handle_async_command(self, data : str, writer):
-        """Recibe un mensaje de manera asincrónica y ejecuta el comando correspondiente."""
+    async def handle_async_command(self, message, writer):
         try:
-            if not data:
-                return
-            command, *args = data.split("|")
-            if command in self.commands:
-                await self.commands[command](writer, *args)
+            self.logger.debug(f"Handling command: {message}")
+            dump_message_info(self.logger, message)
+            
+            # Parse command and arguments
+            parts = message.split('|')
+            if not parts:
+                self.logger.error("Empty command received")
+                return False
+                
+            command = parts[0].strip()
+            args = parts[1:] if len(parts) > 1 else []
+            
+            # Find handler
+            handler = self.commands.get(command)
+            if handler:
+                self.logger.debug(f"Found handler for command: {command} -> {handler.__name__}")
+                try:
+                    await handler(writer, *args)
+                    self.logger.debug(f"Handler {handler.__name__} executed successfully")
+                    return True
+                except Exception as e:
+                    self.logger.error(f"Error executing handler {handler.__name__}: {e}")
+                    import traceback
+                    self.logger.error(traceback.format_exc())
+                    return False
             else:
-                self.log(f"Unknown command: {command}")
+                self.logger.warning(f"No handler found for command: {command}")
+                self.logger.debug(f"Available commands: {list(self.commands.keys())}")
+                return False
+                
         except Exception as e:
-            self.log(f"Error processing message: {e}")
+            self.logger.error(f"Error handling command: {e}")
+            import traceback
+            self.logger.error(traceback.format_exc())
+            return False
 
     def send_message(self, writer : socket.socket, message):
         """Envía un mensaje de manera sincrónica a un destinatario específico."""
@@ -60,12 +87,11 @@ class Communication:
             self.log(f"Error sending message: {e}")
 
     async def send_message_async(self, writer, message):
-        """Envía un mensaje de manera asincrónica a un destinatario específico."""
-        try:
+        if writer:
             writer.write(message.encode())
             await writer.drain()
-        except Exception as e:
-            self.log(f"Error sending message: {e}")
+        else:
+            self.logger.warning(f"Cannot send message - writer is None: {message}")
 
     def send_all_message(self, writers: list[socket.socket], message):
         """Envía un mensaje de manera sincrónica a todos los destinatarios."""
