@@ -42,8 +42,8 @@ class ServerFactory:
             process.daemon = True
             process.start()
             
-            logger.info(f"Created {mode} server '{name}' on port {port}")
-            return process.pid, port
+            logger.info(f"Created {mode} server '{name}' with PID {process.pid} on port {port}")
+            return process.pid, port, process  # Return the process object as well
             
         except Exception as e:
             logger.error(f"Failed to create server: {e}")

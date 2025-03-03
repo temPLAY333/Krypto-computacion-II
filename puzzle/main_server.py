@@ -5,22 +5,21 @@ import asyncio
 import logging
 import threading
 import multiprocessing
+import sys
+import os
 
 from common.social import LogMessages as Logs
 from common.social import UserMainMessages as UM
 from common.social import InterfaceMessages as IM
 from common.social import MainServerMessages as SM
+from common.logger import Logger
 from common.communication import Communication
-from common.logging_helpers import log_incoming, log_outgoing, log_system
 
+# Import the new centralized logger
+from common.logger import Logger
 
 from puzzle.logic import KryptoLogic
 from puzzle.server_factory import ServerFactory
-
-# Restore logger name in the format while keeping the shorter timestamp
-logging.basicConfig(level=logging.INFO,  # Default to INFO level
-                   format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', 
-                   datefmt='%m-%d %H:%M:%S')
 
 class MainServer:
     def __init__(self, host='localhost', port=5000, max_servers=5, debug=False):
@@ -29,18 +28,18 @@ class MainServer:
         self.max_servers = max_servers
         self.debug_enabled = debug
         
-        # Set up logging based on debug flag
-        self.setup_logging(debug)
-
+        # Set up logging using the new centralized logger
+        Logger.configure(debug)
+        
         # Puzzles y servidores
         self.puzzle_queue = multiprocessing.Queue()
         self.message_queue = multiprocessing.Queue()
-        self.server_factory = ServerFactory(self.puzzle_queue, self.message_queue)
+        self.server_factory = ServerFactory(self.puzzle_queue, self.message_queue, debug)
         
-        # Create separate loggers for the two communication channels
-        self.server_logger = logging.getLogger("server_communication")
-        self.users_logger = logging.getLogger("users_communication")
-        self.main_logger = logging.getLogger("MainServer")
+        # Create loggers using the centralized logger
+        self.server_logger = Logger.get("ServerCommunication", debug)
+        self.users_logger = Logger.get("UserCommunication", debug)
+        self.main_logger = Logger.get("MainServer", debug)
         
         # Initialize communication objects
         self.users_communication = Communication(self.users_logger) 
@@ -61,44 +60,18 @@ class MainServer:
 
         self.main_logger.info(f"MainServer initialized with host={host}, port={port}, max_servers={max_servers}, debug={debug}")
     
-    def setup_logging(self, debug):
-        """Set up logging based on debug flag"""
-        level = logging.DEBUG if debug else logging.INFO
-        
-        # Set root logger level
-        root_logger = logging.getLogger()
-        root_logger.setLevel(level)
-        
-        # Reset handlers to avoid duplicate logs
-        for handler in root_logger.handlers[:]:
-            root_logger.removeHandler(handler)
-        
-        # Create console handler with appropriate formatting
-        console_handler = logging.StreamHandler()
-        console_handler.setLevel(level)
-        formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s', 
-                                     datefmt='%m-%d %H:%M:%S')
-        console_handler.setFormatter(formatter)
-        root_logger.addHandler(console_handler)
-        
-        # Set specific logger levels
-        for logger_name in ["server_communication", "users_communication", "message_listener", 
-                           "process_message", "MainServer"]:
-            logger = logging.getLogger(logger_name)
-            logger.setLevel(level)
-    
     def enable_debug(self):
         """Enable debug mode"""
         if not self.debug_enabled:
             self.debug_enabled = True
-            self.setup_logging(True)
+            Logger.configure(True)
             self.main_logger.info("Debug mode enabled")
     
     def disable_debug(self):
         """Disable debug mode"""
         if self.debug_enabled:
             self.debug_enabled = False
-            self.setup_logging(False)
+            Logger.configure(False)
             self.main_logger.info("Debug mode disabled")
     
     def toggle_debug(self):
@@ -189,7 +162,7 @@ class MainServer:
                     logging.info(f"Conexión cerrada por {addr}")
                     break
                 message = data.decode()
-                log_incoming(logging, addr, message)
+                Logger.log_incoming(logging, addr, message)
                 
                 # Handle command through the Communication object
                 await self.users_communication.handle_async_command(message, writer)
@@ -204,7 +177,7 @@ class MainServer:
                 try:
                     error_msg = f"{UM.ERROR}|Server internal error: {str(e)}"
                     await self.users_communication.send_message_async(writer, error_msg)
-                    log_outgoing(logging, addr, error_msg)
+                    Logger.log_outgoing(logging, addr, error_msg)
                 except:
                     pass  # If we can't send the error, we just log it
                 break
@@ -224,7 +197,7 @@ class MainServer:
         try:
             response = UM.OK
             await self.users_communication.send_message_async(writer, response)
-            log_outgoing(logging, addr, response)
+            Logger.log_outgoing(logging, addr, response)
         except Exception as e:
             logging.error(f"Error sending OK response to {addr}: {e}")
 
@@ -236,14 +209,14 @@ class MainServer:
             if not username or not (3 <= len(username) <= 20):
                 response = f"{UM.LOGIN_FAIL}|Invalid username format"
                 await self.users_communication.send_message_async(writer, response)
-                log_outgoing(logging, addr, response)
+                Logger.log_outgoing(logging, addr, response)
                 return
                 
             # Check if username is already taken
             if username in self.players:
                 response = f"{UM.LOGIN_FAIL}|Username already taken"
                 await self.users_communication.send_message_async(writer, response)
-                log_outgoing(logging, addr, response)
+                Logger.log_outgoing(logging, addr, response)
                 return
                 
             # Register the player
@@ -254,14 +227,14 @@ class MainServer:
             # Send success response
             response = f"{UM.LOGIN_SUCCESS}"
             await self.users_communication.send_message_async(writer, response)
-            log_outgoing(logging, addr, response)
+            Logger.log_outgoing(logging, addr, response)
             logging.info(f"Login successful for {username} from {addr}")
         except Exception as e:
             logging.error(f"Error in login for {username} from {addr}: {e}")
             try:
                 response = f"{UM.LOGIN_FAIL}|Server error during login"
                 await self.users_communication.send_message_async(writer, response)
-                log_outgoing(logging, addr, response)
+                Logger.log_outgoing(logging, addr, response)
             except:
                 pass  # If we can't send the error, we just log it
 
@@ -273,7 +246,7 @@ class MainServer:
             if not self.servers:
                 response = f"{UM.SERVER_LIST}|No servers available"
                 await self.users_communication.send_message_async(writer, response)
-                log_outgoing(logging, addr, response)
+                Logger.log_outgoing(logging, addr, response)
                 return
 
             server_list = []
@@ -285,14 +258,14 @@ class MainServer:
             server_list_str = "\n".join(server_list)
             response = f"{UM.SERVER_LIST}|{server_list_str}"
             await self.users_communication.send_message_async(writer, response)
-            log_outgoing(logging, addr, response)
+            Logger.log_outgoing(logging, addr, response)
             logging.info(f"Sent server list to {addr}: {len(self.servers)} servers")
         except Exception as e:
             logging.error(f"Error sending server list to {addr}: {e}")
             try:
                 response = f"{UM.ERROR}|Error retrieving server list"
                 await self.users_communication.send_message_async(writer, response)
-                log_outgoing(logging, addr, response)
+                Logger.log_outgoing(logging, addr, response)
             except:
                 pass  # If we can't send the error, we just log it
 
@@ -309,19 +282,19 @@ class MainServer:
                 
                 response = f"{UM.JOIN_SUCCESS}|{server_name}|{server_port}|{server_mode}"
                 await self.users_communication.send_message_async(writer, response)
-                log_outgoing(logging, addr, response)
+                Logger.log_outgoing(logging, addr, response)
                 logging.info(f"Client {addr} joining server {server_id} ({server_name})")
             else:
                 response = f"{UM.JOIN_FAIL}|Server not found or no longer available"
                 await self.users_communication.send_message_async(writer, response)
-                log_outgoing(logging, addr, response)
+                Logger.log_outgoing(logging, addr, response)
                 logging.warning(f"Client {addr} attempted to join nonexistent server {server_id}")
         except Exception as e:
             logging.error(f"Error processing join request for {server_id} from {addr}: {e}")
             try:
                 response = f"{UM.JOIN_FAIL}|Server error processing join request"
                 await self.users_communication.send_message_async(writer, response)
-                log_outgoing(logging, addr, response)
+                Logger.log_outgoing(logging, addr, response)
             except:
                 pass  # If we can't send the error, we just log it
 
@@ -334,20 +307,20 @@ class MainServer:
             if not server_name or len(server_name) < 3:
                 response = f"{UM.CREATE_FAIL}|Invalid server name (minimum 3 characters)"
                 await self.users_communication.send_message_async(writer, response)
-                log_outgoing(logging, addr, response)
+                Logger.log_outgoing(logging, addr, response)
                 return
                 
             if server_mode not in ["classic", "competitive"]:
                 response = f"{UM.CREATE_FAIL}|Invalid game mode (must be 'classic' or 'competitive')"
                 await self.users_communication.send_message_async(writer, response)
-                log_outgoing(logging, addr, response)
+                Logger.log_outgoing(logging, addr, response)
                 return
                 
             # Check if we've reached the maximum number of servers
             if len(self.servers) >= self.max_servers:
                 response = f"{UM.CREATE_FAIL}|Maximum number of servers reached"
                 await self.users_communication.send_message_async(writer, response)
-                log_outgoing(logging, addr, response)
+                Logger.log_outgoing(logging, addr, response)
                 return
                 
             # Create a new server
@@ -355,7 +328,17 @@ class MainServer:
             
             try:
                 # Start server process
-                server_pid, server_port = self.server_factory.create_server(server_name, server_mode, number)
+                result = self.server_factory.create_server(server_name, server_mode, number)
+                if not result:
+                    response = f"{UM.CREATE_FAIL}|Server creation failed"
+                    await self.users_communication.send_message_async(writer, response)
+                    Logger.log_outgoing(logging, addr, response)
+                    return
+
+                server_pid, server_port, server_process = result
+                
+                # IMPORTANT: Store the server process in the processes dictionary
+                self.processes[server_pid] = server_process
                 
                 # Register server
                 self.servers[server_id] = {
@@ -368,19 +351,19 @@ class MainServer:
                 # Notify client
                 response = f"{UM.CREATE_SUCCESS}|{server_id}"
                 await self.users_communication.send_message_async(writer, response)
-                log_outgoing(logging, addr, response)
-                logging.info(f"Created server {server_id}: {server_name} ({server_mode}) on port {server_port}")
+                Logger.log_outgoing(logging, addr, response)
+                self.main_logger.info(f"Created server with ID '{server_id}' (PID: {server_pid}): {server_name} ({server_mode}) on port {server_port}")
             except Exception as e:
                 logging.error(f"Error creating server process: {e}")
                 response = f"{UM.CREATE_FAIL}|Error starting server process"
                 await self.users_communication.send_message_async(writer, response)
-                log_outgoing(logging, addr, response)
+                Logger.log_outgoing(logging, addr, response)
         except Exception as e:
             logging.error(f"Error in create_server handler from {addr}: {e}")
             try:
                 response = f"{UM.CREATE_FAIL}|Server error processing create request"
                 await self.users_communication.send_message_async(writer, response)
-                log_outgoing(logging, addr, response)
+                Logger.log_outgoing(logging, addr, response)
             except:
                 pass  # If we can't send the error, we just log it
 
@@ -416,7 +399,7 @@ class MainServer:
                 try:
                     # This blocks until a message is available without wasting CPU
                     message = self.message_queue.get()
-                    log_incoming(message_logger, "GameServer", message)
+                    Logger.log_incoming(message_logger, "GameServer", message)
                     
                     # Debug print only if debug is enabled
                     if self.debug_enabled:
@@ -475,7 +458,7 @@ class MainServer:
     
     async def handle_server_ok(self, writer, pid, *args):
         """Handle OK message from a game server"""
-        logging.info(f"Server {pid} reported OK status")
+        self.main_logger.info(f"Server with PID {pid} reported OK status")
         
         # Generate a new puzzle and add it to the queue
         puzzle = KryptoLogic.generar_puzzle()
@@ -483,20 +466,20 @@ class MainServer:
         await asyncio.get_event_loop().run_in_executor(
             None, lambda: self.puzzle_queue.put(puzzle))
         
-        logging.info(f"New puzzle generated for server {pid}")
-        log_outgoing(logging, f"GameServer-{pid}", f"PUZZLE: {puzzle}")
+        self.main_logger.info(f"New puzzle generated for server with PID {pid}")
+        Logger.log_outgoing(logging, f"GameServer-{pid}", f"PUZZLE: {puzzle}")
 
     async def handle_server_error(self, writer, pid, *args):
         """Handle error message from a game server"""
         error_msg = args[0] if args else "Unknown error"
-        logging.error(f"Error reported by server {pid}: {error_msg}")
+        self.main_logger.error(f"Error reported by server with PID {pid}: {error_msg}")
         
         # Add to failed servers list
         self.failed_servers.add(int(pid))
         
         # If it was a pending server, remove it
-        if pid in self.pending_servers:
-            del self.pending_servers[pid]
+        if int(pid) in self.pending_servers:
+            del self.pending_servers[int(pid)]
         
         # Check if we need to terminate the server
         server_id_to_remove = None
@@ -510,11 +493,11 @@ class MainServer:
             await asyncio.get_event_loop().run_in_executor(
                 None, lambda: self.terminate_server_process(pid))
             del self.servers[server_id_to_remove]
-            logging.warning(f"Server {server_id_to_remove} (PID: {pid}) terminated due to error")
+            self.main_logger.warning(f"Server with ID '{server_id_to_remove}' (PID: {pid}) terminated due to error")
 
     async def handle_server_kill(self, writer, pid, *args):
         """Handle kill request from a game server"""
-        logging.info(f"Kill request from server with PID {pid}")
+        self.main_logger.info(f"Kill request from server with PID {pid}")
         
         # Terminate the process
         await asyncio.get_event_loop().run_in_executor(
@@ -529,21 +512,24 @@ class MainServer:
                 
         if server_id_to_remove:
             del self.servers[server_id_to_remove]
-            logging.info(f"Server {server_id_to_remove} (PID: {pid}) removed from active servers")
-    
+            self.main_logger.info(f"Server with ID '{server_id_to_remove}' (PID: {pid}) removed from active servers")
+
     def terminate_server_process(self, pid):
         """Safely terminate a server process"""
+        pid = int(pid)  # Ensure pid is an integer
         try:
             if pid in self.processes:
-                self.processes[pid].terminate()
-                self.processes[pid].join(timeout=2)
+                process = self.processes[pid]
+                self.main_logger.info(f"Terminating process with PID {pid}")
+                process.terminate()
+                process.join(timeout=2)
                 del self.processes[pid]
-                logging.info(f"Process with PID {pid} terminated successfully")
+                self.main_logger.info(f"Process with PID {pid} terminated successfully")
             else:
-                logging.warning(f"No process found with PID {pid}")
+                self.main_logger.warning(f"Cannot terminate: No process found with PID {pid}")
         except Exception as e:
-            logging.error(f"Error terminating process {pid}: {e}")
-    
+            self.main_logger.error(f"Error terminating process with PID {pid}: {e}")
+
     async def shutdown(self):
         """Clean shutdown of the main server"""
         logging.info("Shutting down MainServer...")

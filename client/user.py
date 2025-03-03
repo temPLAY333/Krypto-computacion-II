@@ -1,3 +1,4 @@
+import logging.config
 import re
 import os
 import sys
@@ -12,20 +13,8 @@ from common.communication import Communication
 from client.player_factory import create_player
 from client.user_interface import UserInterface
 
-# Configure logging
-log_dir = os.path.dirname(os.path.abspath(__file__))
-logging.basicConfig(
-    filename=os.path.join(log_dir, 'client.log'),
-    level=logging.INFO, 
-    format='%(asctime)s - %(levelname)s - %(message)s'
-)
-
-# Add console handler to see logs in console too
-console_handler = logging.StreamHandler(sys.stdout)
-console_handler.setLevel(logging.INFO)
-formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
-console_handler.setFormatter(formatter)
-logging.getLogger().addHandler(console_handler)
+# Use the centralized logger
+from common.logger import Logger
 
 class User:
     """User class that handles communication with the main server"""
@@ -42,8 +31,10 @@ class User:
         self.login_result = None
         self.command_results = {}  # To store results of command executions
         
-        # Set up logging and communication
-        self.logger = logging.getLogger("User")
+        # Configure logging using the centralized logger
+        Logger.configure(test_mode)
+        self.logger = Logger.get("User", test_mode)
+        
         self.communication = Communication(self.logger)
         
         # Register command handlers
@@ -370,14 +361,14 @@ class User:
             self.ui.display_message(f"Connecting to {server_name} ({game_type} mode)...")
             
             # Use PlayerFactory to create the appropriate player and interface
-            player, interface = create_player(
+            player = create_player(
                 self.username, 
                 'localhost', 
                 int(server_port), 
                 game_type
             )
             
-            if player and interface:
+            if player:
                 self.ui.display_message(f"Connected to {server_name}. Starting game...")
                 self.logger.info(f"Connected to game server: {server_name}:{server_port}")
                 
@@ -385,7 +376,7 @@ class User:
                 self.ui.pause()
                 
                 # Start the Player interface in a separate thread
-                interface.start()
+                player.play()
                 
                 # Resume the User interface when done
                 self.ui.resume()

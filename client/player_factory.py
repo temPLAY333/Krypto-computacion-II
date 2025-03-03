@@ -1,10 +1,10 @@
-import socket
 import logging
 from client.player import Player
-from client.classic_interface import ClassicPlayerInterface
-from client.competitive_interface import CompetitivePlayerInterface
+from client.classic_interface import ClassicInterface
+from client.competitive_interface import CompetitiveInterface
+from common.logger import Logger
 
-def create_player(username, server_address, server_port, game_type="classic"):
+def create_player(username, server_address, server_port, game_type="classic", debug=False):
     """
     Create and return a Player object with the appropriate interface
     
@@ -13,37 +13,30 @@ def create_player(username, server_address, server_port, game_type="classic"):
         server_address (str): Server's address
         server_port (int): Server's port
         game_type (str): Type of game ('classic' or 'competitive')
+        debug (bool): Enable debug logging
         
     Returns:
-        tuple: (Player, PlayerInterface) or (None, None) if connection fails
+        Player: Configured player object with appropriate interface
     """
-    logger = logging.getLogger("PlayerFactory")
+    logger = Logger.get("PlayerFactory", debug)
     
     try:
-        # Connect to server
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.connect((server_address, server_port))
-        logger.info(f"Connected to server at {server_address}:{server_port}")
-        
-        # Create player
-        player = Player(username, sock)
-        
         # Create appropriate interface
         if game_type.lower() == "competitive":
-            interface = CompetitivePlayerInterface()
-            
-            # Register competitive-specific handlers
-            from common.social import PlayerServerMessages as SM
-            player.communication.register_command(SM.GAME_START, interface.handle_game_start)
-            player.communication.register_command(SM.GAME_COMPLETED, interface.handle_game_completed)
-            player.communication.register_command(SM.GAME_RESULTS, interface.handle_game_results)
+            interface = CompetitiveInterface(debug=debug)
         else:
-            interface = ClassicPlayerInterface()
+            interface = ClassicInterface(debug=debug)
+        
+        # Create player without connecting
+        player = Player(username, server_address, server_port, debug=debug)
         
         # Link player and interface
         player.set_interface(interface)
+        interface.set_player(player)
         
-        return player, interface
+        logger.info(f"Created {game_type} player for {username}")
+        return player
+    
     except Exception as e:
         logger.error(f"Failed to create player: {e}")
-        return None, None
+        return None

@@ -1,7 +1,9 @@
 import logging
 import asyncio
 import socket
-from .debug_utils import dump_message_info
+
+# Use the centralized logger instead of debug_utils
+from common.logger import Logger
 
 class Communication:
     def __init__(self, logger=None):
@@ -44,7 +46,8 @@ class Communication:
     async def handle_async_command(self, message, writer):
         try:
             self.logger.debug(f"Handling command: {message}")
-            dump_message_info(self.logger, message)
+            # Use the centralized logger's method for message dumping
+            Logger.dump_message_info(self.logger, message)
             
             # Parse command and arguments
             parts = message.split('|')

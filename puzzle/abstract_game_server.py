@@ -3,7 +3,6 @@ import asyncio
 import logging
 import os
 from queue import Queue
-import socket
 import time
 
 from common.social import MainServerMessages as SM
@@ -16,11 +15,11 @@ class AbstractGameServer(abc.ABC):
         self.port = port
         self.puzzle_queue = puzzle_queue
         self.message_queue = message_queue
-        self.clients = {}  # Track connected clients
-        self.current_puzzle = None
+        self.clients = {}  # Track connected clients {client_id: {reader, writer, last_activity}}
+        self.current_puzzle = list()
         self.debug_enabled = debug
         
-        # Configure logger with updated format
+        # Configure logger
         self.logger = logging.getLogger(f"GameServer-{name}")
         self.logger.setLevel(logging.DEBUG if debug else logging.INFO)
         
@@ -31,7 +30,6 @@ class AbstractGameServer(abc.ABC):
             self.initialize_puzzles()
             
             # Send OK message to main server after initialization
-            # This ensures GameServer sends it, not ServerFactory
             self.message_queue.put(f"{SM.OK}|{os.getpid()}")
             self.logger.info(f"Sent OK message with PID {os.getpid()} to main server")
             
@@ -87,7 +85,7 @@ class AbstractGameServer(abc.ABC):
                 
         except Exception as e:
             self.logger.error(f"Error running game server: {e}")
-            self.message_queue.put(f"{SM.ERROR}|{str(e)}")
+            self.message_queue.put(f"{SM.ERROR}|{os.getpid()}|{str(e)}")
             
     @abc.abstractmethod
     def get_initial_puzzles(self):
@@ -95,48 +93,28 @@ class AbstractGameServer(abc.ABC):
         pass
     
     @abc.abstractmethod
-    def check_after_solution(self, solution):
+    def check_after_solution(self, client_id, solution):
         """Check what happens after a solution is submitted - must be implemented by subclasses"""
         pass
     
+    @abc.abstractmethod
     async def handle_client_connection(self, reader, writer):
-        """Handle a client connection"""
-        addr = writer.get_extra_info('peername')
-        client_id = f"{addr[0]}:{addr[1]}"
+        """Handle a client connection - can be overridden by subclasses"""
+        pass
         
-        self.logger.info(f"New client connected: {client_id}")
-        
-        # Add client to tracking
-        self.clients[client_id] = {
-            "reader": reader,
-            "writer": writer,
-            "last_activity": time.time()
-        }
-        
-        try:
-            while True:
-                data = await reader.read(1024)
-                if not data:
-                    break
-                    
-                message = data.decode()
-                self.logger.debug(f"Received from {client_id}: {message}")
-                
-                # Process message - implement in subclasses if needed
-                await self.process_client_message(client_id, message)
-                
-        except Exception as e:
-            self.logger.error(f"Error handling client {client_id}: {e}")
-        finally:
-            # Clean up
-            writer.close()
-            await writer.wait_closed()
-            if client_id in self.clients:
-                del self.clients[client_id]
-            self.logger.info(f"Client disconnected: {client_id}")
-            
+    @abc.abstractmethod
     async def process_client_message(self, client_id, message):
-        """Process a message from a client - override in subclasses if needed"""
+        """Process a message from a client - must be implemented by subclasses"""
+        pass
+        
+    @abc.abstractmethod
+    async def send_message_to_client(self, client_id, message):
+        """Send a message to a specific client - must be implemented by subclasses"""
+        pass
+        
+    @abc.abstractmethod
+    async def broadcast_message(self, message):
+        """Send message to all clients - must be implemented by subclasses"""
         pass
         
     def get_next_puzzle(self):
