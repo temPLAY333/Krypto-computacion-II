@@ -1,11 +1,5 @@
-import logging.config
 import re
-import os
-import sys
-import time
 import socket
-import logging
-import threading
 
 from common.social import UserMainMessages as UM
 from common.social import InterfaceMessages as IM
@@ -94,8 +88,18 @@ class User:
     def handle_server_list(self, *args):
         """Handle server list response"""
         server_list_str = args[0] if args else ""
-        self.server_list = server_list_str.split('\n') if server_list_str else []
-        self.logger.info(f"Received server list with {len(self.server_list)} servers")
+        
+        # Special case for "No servers available" message
+        if server_list_str == "No servers available":
+            self.server_list = []
+            self.logger.info("No servers are currently available")
+        else:
+            # Process regular server list
+            self.server_list = server_list_str.split('\n') if server_list_str else []
+            # Filter out any empty strings
+            self.server_list = [s for s in self.server_list if s.strip()]
+            self.logger.info(f"Received server list with {len(self.server_list)} servers")
+        
         self.command_results["server_list"] = self.server_list
     
     def handle_join_success(self, *args):

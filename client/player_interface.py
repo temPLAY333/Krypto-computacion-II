@@ -22,20 +22,15 @@ class PlayerInterface(abc.ABC):
         """
         self.player = player
         self.logger.debug(f"Interface linked to player {player.username}")
-        
+    
+    @abc.abstractmethod
+    def show_new_puzzle(self, puzzle, *args):
+        """Show a new puzzle to the user"""
+        pass
+
     @abc.abstractmethod
     def run(self):
         """Start the interface"""
-        pass
-        
-    @abc.abstractmethod
-    def show_puzzle(self, puzzle, *args):
-        """Display a puzzle to the user"""
-        pass
-        
-    @abc.abstractmethod
-    def show_new_puzzle(self, puzzle, *args):
-        """Display a new puzzle to the user"""
         pass
         
     @abc.abstractmethod

@@ -30,18 +30,32 @@ class Communication:
         else:
             print(message)
 
-    def handle_sync_command(self, data: str):
-        """Recibe un mensaje de manera sincrónica y ejecuta el comando correspondiente."""
+    def handle_sync_command(self, message):
+        """Process a command message with better error handling"""
         try:
-            if not data:
-                return
-            command, *args = data.split("|")
+            # Skip empty messages
+            if not message or not message.strip():
+                return False
+                
+            # Log raw message for debugging
+            self.logger.debug(f"Processing message: '{message}'")
+            
+            # Split into command and arguments
+            parts = message.split('|')
+            command = parts[0]
+            args = parts[1:] if len(parts) > 1 else []
+            
+            # Handle the command
             if command in self.commands:
+                self.logger.debug(f"Handling command: {command} with args: {args}")
                 self.commands[command](*args)
+                return True
             else:
-                self.log(f"Unknown command: {command}")
+                self.logger.warning(f"Unknown command: {command}")
+                return False
         except Exception as e:
-            self.log(f"Error processing message: {e}")
+            self.logger.error(f"Error processing command: {e}")
+            return False
 
     async def handle_async_command(self, message, writer):
         try:
@@ -82,19 +96,34 @@ class Communication:
             self.logger.error(traceback.format_exc())
             return False
 
-    def send_message(self, writer : socket.socket, message):
-        """Envía un mensaje de manera sincrónica a un destinatario específico."""
+    def send_message(self, socket, message):
+        """Send a message with proper termination"""
         try:
-            writer.sendall(message.encode())
+            # Ensure message ends with a newline to mark message boundary
+            if not message.endswith('\n'):
+                message += '\n'
+            socket.sendall(message.encode('utf-8'))
+            return True
         except Exception as e:
-            self.log(f"Error sending message: {e}")
+            self.logger.error(f"Send error: {e}")
+            return False
 
     async def send_message_async(self, writer, message):
-        if writer:
-            writer.write(message.encode())
-            await writer.drain()
-        else:
-            self.logger.warning(f"Cannot send message - writer is None: {message}")
+        """Send a message asynchronously with proper termination"""
+        try:
+            if writer:
+                # Ensure message ends with a newline to mark message boundary
+                if not message.endswith('\n'):
+                    message += '\n'
+                writer.write(message.encode('utf-8'))
+                await writer.drain()
+                return True
+            else:
+                self.logger.warning(f"Cannot send message - writer is None: {message}")
+                return False
+        except Exception as e:
+            self.logger.error(f"Send error: {e}")
+            return False
 
     def send_all_message(self, writers: list[socket.socket], message):
         """Envía un mensaje de manera sincrónica a todos los destinatarios."""
@@ -107,15 +136,26 @@ class Communication:
             await self.send_message_async(writer, message)
             
     def receive_message(self, socket):
-        """Receives and parses a message, returning success status, command, and arguments"""
         try:
-            data = socket.recv(1024).decode()
+            if not hasattr(self, 'buffer'):
+                self.buffer = ""
+                
+            data = socket.recv(4096)
             if not data:
                 return False, None
+                
+            # Add to buffer
+            self.buffer += data.decode('utf-8')
             
-            return True, data
+            # Check if we have a complete message
+            if '\n' in self.buffer:
+                # Split at first newline
+                message, self.buffer = self.buffer.split('\n', 1)
+                return True, message
+            
+            return True, self.buffer  # Return partial message
         except Exception as e:
-            self.log(f"Error receiving message: {e}")
+            self.logger.error(f"Receive error: {e}")
             return False, None
     
     def execute_command(self, data):

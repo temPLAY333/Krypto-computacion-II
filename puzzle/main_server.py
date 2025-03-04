@@ -220,7 +220,7 @@ class MainServer:
                 return
                 
             # Register the player
-            player_id = str(uuid.uuid4())
+            player_id = str(uuid.uuid4())[:8]
             self.players[username] = {"id": player_id, "writer": writer}
             logging.info(f"Jugador conectado: {username} (ID: {player_id})")
             
@@ -272,7 +272,9 @@ class MainServer:
     async def handle_server_choice(self, writer, server_id):
         """Permite al jugador unirse a un servidor existente."""
         addr = writer.get_extra_info('peername')
-        logging.info(f"Join server request for {server_id} from {addr}")
+        server_id = server_id.strip()  # Clean up any whitespace
+        logging.info(f"Join server request for '{server_id}' from {addr}")
+        
         try:
             if server_id in self.servers:
                 server_details = self.servers[server_id]
@@ -285,18 +287,16 @@ class MainServer:
                 Logger.log_outgoing(logging, addr, response)
                 logging.info(f"Client {addr} joining server {server_id} ({server_name})")
             else:
+                # Debug which server IDs are available
+                available_ids = list(self.servers.keys())
+                logging.warning(f"Server ID '{server_id}' not found. Available IDs: {available_ids}")
+                
                 response = f"{UM.JOIN_FAIL}|Server not found or no longer available"
                 await self.users_communication.send_message_async(writer, response)
                 Logger.log_outgoing(logging, addr, response)
                 logging.warning(f"Client {addr} attempted to join nonexistent server {server_id}")
         except Exception as e:
             logging.error(f"Error processing join request for {server_id} from {addr}: {e}")
-            try:
-                response = f"{UM.JOIN_FAIL}|Server error processing join request"
-                await self.users_communication.send_message_async(writer, response)
-                Logger.log_outgoing(logging, addr, response)
-            except:
-                pass  # If we can't send the error, we just log it
 
     async def handle_create_server(self, writer, server_name, server_mode, number):
         """Crea un nuevo servidor y lo registra."""

@@ -38,11 +38,14 @@ class Player:
     def register_message_handlers(self):
         """Register handlers for GameServer messages"""
         handlers = {
+            PSM.GREETING: self.handle_welcome,
             SCM.PUZZLE: self.handle_puzzle,
             SCM.NEW_PUZZLE: self.handle_new_puzzle,
             SCM.SOLUTION_CORRECT: self.handle_solution_correct,
             SCM.SOLUTION_INCORRECT: self.handle_solution_incorrect,
+            SCM.SURRENDER_STATUS: self.handle_surrender_status,
             SCM.SCORE_UPDATE: self.handle_score_update,
+            SCM.GAME_STATUS: self.handle_game_status, 
             SCM.ERROR: self.handle_error,
         }
         self.communication.define_all_commands(handlers)
@@ -88,28 +91,34 @@ class Player:
         thread.start()
         
     def listen_for_messages(self):
-        """Listen and process messages from GameServer"""
+        """Listen for messages from server"""
+        self.logger.info("Starting message listener thread")
+        
         while self.connected:
             try:
-                success, data = self.communication.receive_message(self.socket)
-                if not success or not data:
-                    self.logger.warning("Connection closed by server")
+                success, message = self.communication.receive_message(self.socket)
+                if not success:
+                    self.logger.error("Connection lost")
                     self.connected = False
                     break
                     
-                if self.debug:
-                    self.logger.debug(f"Received: {data}")
-                
-                self.communication.handle_sync_command(data)
-                
+                if message:
+                    self.logger.debug(f"Raw message received: '{message}'")
+                    
+                    # Process message
+                    self.communication.handle_sync_command(message)
+                    
+                    # Force immediate UI refresh after any message
+                    if self.interface and hasattr(self.interface, 'request_refresh'):
+                        self.interface.request_refresh()
+                        
             except Exception as e:
                 self.logger.error(f"Error in listener: {e}")
+                if self.debug:
+                    import traceback
+                    self.logger.error(traceback.format_exc())
                 self.connected = False
                 break
-                
-        # Notify interface
-        if self.interface:
-            self.interface.show_message("Connection to server lost")
     
     def request_puzzle(self):
         """Request a puzzle from server"""
@@ -186,19 +195,39 @@ class Player:
         return True
         
     # Message handlers
+
+    def handle_welcome(self, server_name, *args):
+        """Handle welcome message from server
+        
+        Args:
+            server_name (str): Name of the server
+        """
+        try:
+            if self.interface:
+                self.interface.add_message(f"Connected to server: {server_name}")
+                # Request current puzzle immediately after welcome
+                self.request_puzzle()
+            self.logger.info(f"Received welcome from server: {server_name}")
+        except Exception as e:
+            self.logger.error(f"Error processing welcome message: {e}")
+
     def handle_puzzle(self, puzzle, *args):
         """Handle puzzle message from server"""
+        self.logger.debug(f"BEFORE: current_puzzle = {self.current_puzzle}")
         self.current_puzzle = puzzle
         if self.interface:
             self.interface.show_puzzle(puzzle, *args)
         self.logger.info(f"Received puzzle: {puzzle}")
-    
+        self.logger.debug(f"AFTER: current_puzzle = {self.current_puzzle}")
+
     def handle_new_puzzle(self, puzzle, *args):
         """Handle new puzzle message"""
+        self.logger.debug(f"BEFORE: current_puzzle = {self.current_puzzle}")
         self.current_puzzle = puzzle
         if self.interface:
             self.interface.show_new_puzzle(puzzle, *args)
         self.logger.info(f"Received new puzzle: {puzzle}")
+        self.logger.debug(f"AFTER: current_puzzle = {self.current_puzzle}")
     
     def handle_solution_correct(self, *args):
         """Handle correct solution message"""
@@ -212,10 +241,57 @@ class Player:
             self.interface.show_solution_result(False, *args)
         self.logger.info("Solution incorrect")
     
+        # In Player class - add/update handler
+    def handle_surrender_status(self, status="", *args):
+        """Handle surrender status message
+        
+        Args:
+            status (str): Additional status info like disable_input
+        """
+        try:
+            if self.interface:
+                self.interface.show_message("You surrendered this puzzle")
+                if status == "disable_input":
+                    self.interface.disable_input_until_new_puzzle()
+        except Exception as e:
+            self.logger.error(f"Error processing surrender status: {e}")
+    
     def handle_score_update(self, player_name, score, *args):
         """Handle score update message"""
         if self.interface:
             self.interface.show_score_update(player_name, score, *args)
+
+    def handle_game_status(self, total_players, correct_answers, surrendered, *args):
+        """Handle game status update message
+        
+        Args:
+            total_players (int): Total number of players in the server
+            correct_answers (int): Number of players with correct answers
+            surrendered (int): Number of players who surrendered
+        """
+        try:
+            if self.interface:
+                # Strip any non-numeric parts from values
+                total_players_str = ''.join(c for c in str(total_players) if c.isdigit())
+                correct_answers_str = ''.join(c for c in str(correct_answers) if c.isdigit())
+                surrendered_str = ''.join(c for c in str(surrendered) if c.isdigit())
+                
+                # Log raw and cleaned values for debugging
+                self.logger.debug(f"Raw game status: {total_players},{correct_answers},{surrendered}")
+                self.logger.debug(f"Cleaned game status: {total_players_str},{correct_answers_str},{surrendered_str}")
+                
+                # Use default values if we can't parse
+                try:
+                    total_players_int = int(total_players_str) if total_players_str else 0
+                    correct_answers_int = int(correct_answers_str) if correct_answers_str else 0
+                    surrendered_int = int(surrendered_str) if surrendered_str else 0
+                except ValueError:
+                    self.logger.error(f"Failed to parse game stats values")
+                    return
+                    
+                self.interface.show_game_stats(total_players_int, correct_answers_int, surrendered_int)
+        except Exception as e:
+            self.logger.error(f"Error processing game status: {e}")
     
     def handle_error(self, error_msg, *args):
         """Handle error message from server"""

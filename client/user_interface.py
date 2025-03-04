@@ -1,5 +1,6 @@
 import curses
 import logging
+import re
 import time
 import threading
 import signal
@@ -297,22 +298,10 @@ class UserInterface:
     
     def view_server_list(self):
         """View the list of available servers"""
-        self.update_status("Getting server list...")
-        server_list = self.user.get_server_list()
-        
-        if not server_list:
-            self.display_message("No servers available.", self.COLOR_WARNING)
-            return
-        
-        message = "Available Servers:\n\n"
-        for i, server in enumerate(server_list, 1):
-            message += f"{i}. {server}\n"
-        
-        message += "\nPress any key to return to the main menu."
-        self.display_message(message)
+        pass
     
     def join_server(self):
-        """Join a server"""
+        """View list of available servers"""
         self.update_status("Getting server list...")
         server_list = self.user.get_server_list()
         
@@ -323,22 +312,34 @@ class UserInterface:
         # Parse server details from the formatted strings
         server_details = []
         for server_str in server_list:
-            # Extract server ID and name from string like "ID: abc123, Name: ..., Mode: ..."
-            parts = server_str.split(',')
-            id_part = parts[0].strip()
-            name_part = parts[1].strip()
-            mode_part = parts[2].strip()
-            server_id = id_part.replace("ID:", "").strip()
-            server_name = name_part.replace("Name:", "").strip()
-            server_mode = mode_part.replace("Mode:", "").strip()
-            server_details.append((server_id, f"{server_name} ({server_mode})"))
+            try:
+                # Extract server ID from string like "ID: abc123, Name: ..., Mode: ..."
+                id_match = re.search(r"ID:\s*([^,]+)", server_str)
+                name_match = re.search(r"Name:\s*([^,]+)", server_str)
+                mode_match = re.search(r"Mode:\s*([^,]+)", server_str)
+                
+                if id_match and name_match and mode_match:
+                    server_id = id_match.group(1).strip()
+                    server_name = name_match.group(1).strip()
+                    server_mode = mode_match.group(1).strip()
+                    server_details.append((server_id, f"{server_name} ({server_mode})"))
+                else:
+                    self.logger.warning(f"Couldn't parse server entry: {server_str}")
+            except Exception as e:
+                self.logger.error(f"Error parsing server entry: {server_str} - {e}")
         
-        # Build dictionary of server options
+        # No valid servers parsed
+        if not server_details:
+            self.display_message("No valid servers found.", self.COLOR_WARNING)
+            return
+        
+        # Build menu
         options = {str(i): server_details[i-1][1] for i in range(1, len(server_details) + 1)}
         options["c"] = "Cancel"
         
+        # Show menu
         choice = self.menu(
-            "Join Server",
+            "Available Servers",
             options,
             "Select a server to join:"
         )
@@ -346,6 +347,7 @@ class UserInterface:
         if choice == "c":
             return
         
+        # Join selected server
         server_id = server_details[int(choice) - 1][0]
         self.user.join_server(server_id)
     

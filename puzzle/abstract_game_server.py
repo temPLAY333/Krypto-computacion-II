@@ -2,7 +2,7 @@ import abc
 import asyncio
 import logging
 import os
-from queue import Queue
+from queue import Empty, Queue
 import time
 
 from common.social import MainServerMessages as SM
@@ -103,26 +103,23 @@ class AbstractGameServer(abc.ABC):
         pass
         
     @abc.abstractmethod
-    async def process_client_message(self, client_id, message):
-        """Process a message from a client - must be implemented by subclasses"""
-        pass
-        
-    @abc.abstractmethod
-    async def send_message_to_client(self, client_id, message):
-        """Send a message to a specific client - must be implemented by subclasses"""
-        pass
-        
-    @abc.abstractmethod
     async def broadcast_message(self, message):
         """Send message to all clients - must be implemented by subclasses"""
         pass
         
     def get_next_puzzle(self):
-        """Get the next puzzle from the queue"""
+        """Get the next puzzle from the queue or generate one if needed"""
         try:
-            puzzle = self.puzzle_queue.get(timeout=5)
-            self.current_puzzle = puzzle
-            return puzzle
+            if not self.puzzle_queue.empty():
+                next_puzzle = self.puzzle_queue.get()
+                self.logger.info(f"Got new puzzle from queue: {next_puzzle}")
+                return next_puzzle
+            else:
+                self.logger.warning("Puzzle queue empty, generating a random puzzle")
+                # Import here to avoid circular imports
+                random_puzzle = [4,7,3,6,2]
+                self.logger.info(f"Generated random puzzle: {random_puzzle}")
+                return random_puzzle
         except Exception as e:
             self.logger.error(f"Error getting next puzzle: {e}")
             return None

@@ -96,6 +96,8 @@ class ServerClientMessages:
     SUBMIT_SOLUTION = "submit_solution"
     SOLUTION_CORRECT = "solution_correct"
     SOLUTION_INCORRECT = "solution_incorrect"
+    SURRENDER_STATUS = "surrender_status"
     NEW_PUZZLE = "new_puzzle"
     SCORE_UPDATE = "score_update"
+    GAME_STATUS = "GAME_STATUS"
     ERROR = "error"

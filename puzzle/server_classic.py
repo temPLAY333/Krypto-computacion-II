@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+import time
 from common.social import ServerClientMessages as SCM
 from common.social import PlayerServerMessages as PSM
 from common.social import MainServerMessages as SM
@@ -21,6 +22,12 @@ class ClassicServer(AbstractGameServer):
         self.player_usernames = {}  # Map client_id to username
         self.solved_count = 0
         self.total_players = 0
+        
+        # Add game stats tracking
+        self.stats = {
+            "correct_answers": 0,
+            "surrendered": 0
+        }
         
         # Initialize Communication
         self.comm = Communication(logger=self.logger)
@@ -45,16 +52,16 @@ class ClassicServer(AbstractGameServer):
         """Handle GET_PUZZLE command"""
         client_id = self.get_client_id_from_writer(writer)
         if self.current_puzzle:
-            await self.send_message_to_client(client_id, f"{SCM.PUZZLE}|{self.current_puzzle}")
+            await self.comm.send_message_async(writer, f"{SCM.PUZZLE}|{self.current_puzzle}")
         else:
-            await self.send_message_to_client(client_id, f"{SCM.ERROR}|No puzzle available")
+            await self.comm.send_message_async(writer, f"{SCM.ERROR}|No puzzle available")
     
     async def handle_submit_solution(self, writer, *args):
         """Handle SUBMIT_SOLUTION command"""
         client_id = self.get_client_id_from_writer(writer)
         
         if not args:
-            await self.send_message_to_client(client_id, f"{SCM.ERROR}|Invalid solution format")
+            await self.comm.send_message_async(writer, f"{SCM.ERROR}|Invalid solution format\n")
             return
             
         solution = str(args[0])
@@ -65,16 +72,37 @@ class ClassicServer(AbstractGameServer):
             
         # Validate solution
         if self.validate_solution(solution):
-            await self.send_message_to_client(client_id, f"{SCM.SOLUTION_CORRECT}")
+            # First send the correct solution response
+            await self.comm.send_message_async(writer, f"{SCM.SOLUTION_CORRECT}\n")
+            self.logger.info(f"Player {self.player_usernames.get(client_id, client_id)} answered correctly")
             
-            # Get next puzzle if solution is correct
-            new_puzzle = self.check_after_solution(client_id, solution)
-            if new_puzzle:
-                # Broadcast new puzzle to all clients
-                await self.broadcast_message(f"{SCM.NEW_PUZZLE}|{new_puzzle}")
+            # Update stats
+            self.stats["correct_answers"] += 1
+            
+            # Send updated stats
+            await self.broadcast_game_stats()
+            
+            # Check if we need a new puzzle
+            total_players = len(self.clients)
+            if total_players > 0 and total_players <= self.stats["correct_answers"] + self.stats["surrendered"]:
+                # Get new puzzle
+                new_puzzle = self.get_next_puzzle()
+                if new_puzzle:
+                    self.logger.info(f"All players completed the puzzle. Sending new puzzle: {new_puzzle}")
+                    self.current_puzzle = new_puzzle
+                    # Reset stats for new puzzle
+                    self.stats["correct_answers"] = 0
+                    self.stats["surrendered"] = 0
+                    
+                    # THIS LINE WAS MISSING - It gets the puzzle but doesn't send it
+                    await self.broadcast_message(f"{SCM.NEW_PUZZLE}|{new_puzzle}\n")
+                    
+                    # Send updated stats again
+                    await asyncio.sleep(0.1)  # Small delay for message separation
+                    await self.broadcast_game_stats()
         else:
-            await self.send_message_to_client(client_id, f"{SCM.SOLUTION_INCORRECT}")
-    
+            await self.comm.send_message_async(writer, f"{SCM.SOLUTION_INCORRECT}\n")
+
     async def handle_player_surrender(self, writer, *args):
         """Handle PLAYER_SURRENDER command"""
         client_id = self.get_client_id_from_writer(writer)
@@ -86,8 +114,37 @@ class ClassicServer(AbstractGameServer):
         else:
             self.logger.info(f"Player {client_id} surrendered")
         
-        await self.send_message_to_client(client_id, f"{SCM.ERROR}|Puzzle surrendered")
-    
+        # Update stats for surrender
+        self.stats["surrendered"] += 1
+        
+        # Send surrender acknowledgment
+        await self.comm.send_message_async(writer, f"{SCM.SURRENDER_STATUS}|disable_input\n")
+        
+        # Broadcast updated stats
+        await self.broadcast_game_stats()
+        
+        # Check if we need a new puzzle - THIS WAS MISSING!
+        total_players = len(self.clients)
+        if total_players > 0 and total_players <= self.stats["correct_answers"] + self.stats["surrendered"]:
+            # Add a small delay for message separation
+            await asyncio.sleep(0.1)
+            
+            # Get and send new puzzle
+            new_puzzle = self.get_next_puzzle()
+            if new_puzzle:
+                self.logger.info(f"All players surrendered or completed. New puzzle: {new_puzzle}")
+                self.current_puzzle = new_puzzle
+                # Reset stats for new puzzle
+                self.stats["correct_answers"] = 0
+                self.stats["surrendered"] = 0
+                
+                # Send new puzzle to all clients
+                await self.broadcast_message(f"{SCM.NEW_PUZZLE}|{new_puzzle}")
+                
+                # Wait a moment then send updated stats again
+                await asyncio.sleep(0.1)
+                await self.broadcast_game_stats()
+
     async def handle_player_exit(self, writer, *args):
         """Handle PLAYER_EXIT command"""
         client_id = self.get_client_id_from_writer(writer)
@@ -95,8 +152,14 @@ class ClassicServer(AbstractGameServer):
         if args:
             username = args[0]
             self.player_usernames[client_id] = username
+        
         self.logger.info(f"Player {self.player_usernames.get(client_id, client_id)} exited")
-        # No response needed as client is disconnecting
+        
+        # Clean up client immediately to prevent "forced disconnection" errors
+        if client_id in self.clients:
+            del self.clients[client_id]
+            # Update stats after player exit
+            await self.broadcast_game_stats()
     
     def get_client_id_from_writer(self, writer):
         """Get client ID from writer object"""
@@ -139,7 +202,6 @@ class ClassicServer(AbstractGameServer):
         client_id = f"{addr[0]}:{addr[1]}"
         
         self.logger.info(f"New client connected: {client_id}")
-        self.total_players += 1
         
         # Add client to tracking
         self.clients[client_id] = {
@@ -150,11 +212,14 @@ class ClassicServer(AbstractGameServer):
         
         try:
             # Send welcome message
-            await self.send_message_to_client(client_id, f"{PSM.GREETING}|{self.name}")
+            await self.comm.send_message_async(writer, f"{PSM.GREETING}|{self.name}")
             
             # Send current puzzle immediately
             if self.current_puzzle:
-                await self.send_message_to_client(client_id, f"{SCM.PUZZLE}|{self.current_puzzle}")
+                await self.comm.send_message_async(writer, f"{SCM.PUZZLE}|{self.current_puzzle}")
+            
+            # Broadcast updated game stats after new client connects
+            await self.broadcast_game_stats()
             
             # Handle client messages
             while True:
@@ -180,19 +245,55 @@ class ClassicServer(AbstractGameServer):
                 
             if client_id in self.clients:
                 del self.clients[client_id]
-        if client_id in self.clients:
-            writer = self.clients[client_id]["writer"]
-            writer.write(message.encode())
-            await writer.drain()
-            self.logger.debug(f"Sent to {client_id}: {message}")
+                # Broadcast updated stats after client disconnects
+                await self.broadcast_game_stats()
+    
+    async def broadcast_game_stats(self):
+        """Broadcast current game statistics to all connected clients"""
+        try:
+            # Count only clients that are still connected
+            active_clients = {cid: data for cid, data in self.clients.items() 
+                            if not data.get("disconnected", False)}
+            
+            total_players = len(active_clients)
+            correct_answers = self.stats["correct_answers"]
+            surrendered = self.stats["surrendered"]
+            
+            # Format the game status message
+            message = f"{SCM.GAME_STATUS}|{total_players}|{correct_answers}|{surrendered}"
+            
+            self.logger.debug(f"Broadcasting stats: Players={total_players}, Correct={correct_answers}, Surrendered={surrendered}")
+            
+            # Broadcast to all clients
+            await self.broadcast_message(message)
+            
+            # Log if puzzles should reset but aren't
+            if total_players > 0 and total_players <= correct_answers + surrendered:
+                self.logger.warning(f"All players ({total_players}) have completed the puzzle "
+                                f"({correct_answers} correct, {surrendered} surrendered). "
+                                f"A new puzzle should be sent.")
+                
+        except Exception as e:
+            self.logger.error(f"Failed to broadcast game stats: {e}")
             
     async def broadcast_message(self, message):
         """Send a message to all connected clients"""
-        for client_id, client_data in self.clients.items():
-            writer = client_data["writer"]
-            writer.write(message.encode())
-            await writer.drain()
-        self.logger.debug(f"Broadcast to {len(self.clients)} clients: {message}")
+        try:
+            self.logger.debug(f"Broadcasting: {message}")
+            
+            for client_id, client_data in list(self.clients.items()):
+                writer = client_data["writer"]
+                try:
+                    writer.write(message.encode())
+                    await writer.drain()
+                except Exception as e:
+                    self.logger.error(f"Failed to send to client {client_id}: {e}")
+                    # Mark client for removal
+                    del self.clients[client_id]
+                    
+            self.logger.debug(f"Broadcast complete to {len(self.clients)} clients")
+        except Exception as e:
+            self.logger.error(f"Broadcast error: {e}")
             
     def validate_solution(self, solution:str):
         """Validate a solution against the current puzzle
