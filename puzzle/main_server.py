@@ -99,7 +99,7 @@ class MainServer:
         handlers = {
             SM.OK: self.handle_server_ok,
             SM.ERROR: self.handle_server_error,
-            SM.KILL: self.handle_server_kill,
+            SM.KILL_SERVER: self.handle_server_kill,
         }
         self.server_communication.define_all_commands(handlers)
         logging.info("Server command handlers registered")

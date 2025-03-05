@@ -87,7 +87,7 @@ class MainServerMessages:
     """Messages between game server and main server"""
     OK = "ok"
     ERROR = "error"
-    KILL = "kill"
+    KILL_SERVER = "kill"
 
 class ServerClientMessages:
     """Messages between game servers and clients"""

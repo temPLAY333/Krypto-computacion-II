@@ -135,7 +135,6 @@ class ClassicInterface(PlayerInterface):
         
         if user_input.lower() == 'quit':
             self.player.surrender()
-            self.add_message("You surrendered this puzzle")
         else:
             self.player.submit_solution(user_input)
         
@@ -208,11 +207,7 @@ class ClassicInterface(PlayerInterface):
         Args:
             puzzle: The puzzle to display
         """
-        try:
-            # Store in the player object
-            if self.player:
-                self.player.current_puzzle = puzzle
-                
+        try:                
             # Display in message area
             self.add_message(f"Current puzzle: {puzzle}")
             self.refresh_needed = True  # Request refresh
@@ -223,7 +218,7 @@ class ClassicInterface(PlayerInterface):
         """Show a new puzzle to the user"""
         self.add_message(f"New puzzle: {puzzle}")
         # Reset input disabled flag when new puzzle arrives
-        if hasattr(self, 'input_disabled'):
+        if hasattr(self, 'input_disabled') and self.input_disabled:
             self.input_disabled = False
             self.add_message("Input enabled for new puzzle")
         self.refresh_needed = True  # Request refresh

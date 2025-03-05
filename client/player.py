@@ -1,5 +1,6 @@
 import socket
 import threading
+from client.player_interface import PlayerInterface
 from common.social import PlayerServerMessages as PSM
 from common.social import ServerClientMessages as SCM
 from common.communication import Communication
@@ -50,7 +51,7 @@ class Player:
         }
         self.communication.define_all_commands(handlers)
         
-    def set_interface(self, interface):
+    def set_interface(self, interface: PlayerInterface):
         """Set the interface for player interaction
         
         Args:
@@ -78,8 +79,6 @@ class Player:
             # Start listener
             self.start_listener()
             
-            # Request puzzle
-            self.request_puzzle()
             return True
         except Exception as e:
             self.logger.error(f"Connection failed: {e}")
@@ -108,10 +107,17 @@ class Player:
                     # Process message
                     self.communication.handle_sync_command(message)
                     
-                    # Force immediate UI refresh after any message
+                    # Process any additional complete messages in buffer
+                    while self.connected and self.communication.has_complete_message():
+                        success, next_message = self.communication.get_next_message()
+                        if success:
+                            self.logger.debug(f"Processing additional message from buffer: '{next_message}'")
+                            self.communication.handle_sync_command(next_message)
+                    
+                    # Force immediate UI refresh after processing all messages
                     if self.interface and hasattr(self.interface, 'request_refresh'):
                         self.interface.request_refresh()
-                        
+                            
             except Exception as e:
                 self.logger.error(f"Error in listener: {e}")
                 if self.debug:
@@ -205,8 +211,6 @@ class Player:
         try:
             if self.interface:
                 self.interface.add_message(f"Connected to server: {server_name}")
-                # Request current puzzle immediately after welcome
-                self.request_puzzle()
             self.logger.info(f"Received welcome from server: {server_name}")
         except Exception as e:
             self.logger.error(f"Error processing welcome message: {e}")
@@ -225,7 +229,12 @@ class Player:
         self.logger.debug(f"BEFORE: current_puzzle = {self.current_puzzle}")
         self.current_puzzle = puzzle
         if self.interface:
-            self.interface.show_new_puzzle(puzzle, *args)
+            self.interface.show_new_puzzle(puzzle)
+            self.interface.show_game_stats(
+                total_players=self.interface.stats.get("total_players", 0), 
+                correct_answers=0,  # Reset to zero
+                surrendered=0       # Reset to zero
+            )
         self.logger.info(f"Received new puzzle: {puzzle}")
         self.logger.debug(f"AFTER: current_puzzle = {self.current_puzzle}")
     

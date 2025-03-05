@@ -95,6 +95,18 @@ class Communication:
             import traceback
             self.logger.error(traceback.format_exc())
             return False
+    
+    def has_complete_message(self):
+        """Check if buffer has a complete message without reading from socket"""
+        return hasattr(self, 'buffer') and '\n' in self.buffer
+    
+    def get_next_message(self):
+        """Get next complete message from buffer without reading from socket"""
+        if not self.has_complete_message():
+            return False, None
+            
+        message, self.buffer = self.buffer.split('\n', 1)
+        return True, message
 
     def send_message(self, socket, message):
         """Send a message with proper termination"""
@@ -136,24 +148,32 @@ class Communication:
             await self.send_message_async(writer, message)
             
     def receive_message(self, socket):
+        """Receive a complete message (ending with newline) from the socket"""
         try:
             if not hasattr(self, 'buffer'):
                 self.buffer = ""
                 
-            data = socket.recv(4096)
-            if not data:
-                return False, None
-                
-            # Add to buffer
-            self.buffer += data.decode('utf-8')
+            # Try to receive data if we don't already have a complete message
+            if '\n' not in self.buffer:
+                data = socket.recv(4096)
+                if not data:
+                    return False, None
+                    
+                # Add to buffer
+                decoded_data = data.decode('utf-8')
+                self.buffer += decoded_data
+                self.logger.debug(f"Added {len(decoded_data)} bytes to buffer. Buffer now contains {len(self.buffer)} bytes")
             
             # Check if we have a complete message
             if '\n' in self.buffer:
                 # Split at first newline
                 message, self.buffer = self.buffer.split('\n', 1)
+                self.logger.debug(f"Extracted complete message: '{message}', remaining buffer: {len(self.buffer)} bytes")
                 return True, message
             
-            return True, self.buffer  # Return partial message
+            # We don't have a complete message yet, wait for more data
+            self.logger.debug(f"No complete message yet, buffer contains {len(self.buffer)} bytes")
+            return True, None  # Only return complete messages, not partial ones
         except Exception as e:
             self.logger.error(f"Receive error: {e}")
             return False, None
