@@ -1,3 +1,4 @@
+import time
 import socket
 import threading
 from client.player_interface import PlayerInterface
@@ -172,17 +173,36 @@ class Player:
         """Exit the game"""
         try:
             if self.connected:
-                message = f"{PSM.PLAYER_EXIT}|{self.username}"
-                self.communication.send_message(self.socket, message)
+                # Primero marcar como desconectado para detener el listener thread
+                self.connected = False
                 
-            if self.socket:
-                self.socket.close()
+                # Enviar mensaje de salida de forma ordenada
+                try:
+                    message = f"{PSM.PLAYER_EXIT}|{self.username}"
+                    self.communication.send_message(self.socket, message)
+                    
+                    # Esperar brevemente para que el mensaje se envíe completamente
+                    time.sleep(0.5)
+                except Exception as e:
+                    self.logger.warning(f"Error al enviar mensaje de salida: {e}")
+            
+            # Cerrar socket después de enviar mensajes
+            if hasattr(self, 'socket') and self.socket:
+                try:
+                    self.socket.shutdown(socket.SHUT_RDWR)  # Cerrar ordenadamente
+                except:
+                    pass  # El socket ya podría estar cerrado
+                
+                try:
+                    self.socket.close()
+                except:
+                    pass
+                
                 self.socket = None
                 
-            self.connected = False
-            self.logger.info("Disconnected from server")
+            self.logger.info("Desconectado del servidor")
         except Exception as e:
-            self.logger.error(f"Error during exit: {e}")
+            self.logger.error(f"Error durante la desconexión: {e}")
     
     def play(self):
         """Start the game

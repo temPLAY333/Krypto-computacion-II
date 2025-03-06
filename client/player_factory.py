@@ -19,6 +19,10 @@ def create_player(username, server_address, server_port, game_type="classic", de
         Player: Configured player object with appropriate interface
     """
     logger = Logger.get("PlayerFactory", debug)
+
+    if not username:
+        logging.error("No se puede crear el jugador: nombre de usuario no proporcionado")
+        return None
     
     try:
         # Create appropriate interface

@@ -44,14 +44,22 @@ class InterfaceMessages:
     INVALID_USERNAME = "Invalid username format! Please use 8-20 alphanumeric characters."
     LOGIN_SUCCESS = "Login successful!"
     LOGIN_ERROR = "Login failed. Please try again."
-    MAIN_MENU = (
-        "Main Menu:\n"
-        "1. View servers\n"
-        "2. Join a server\n"
-        "3. Create a server\n"
-        "Type 'exit' to quit.\n"
-        "Enter your choice: "
-    )
+    TUTORIAL = """
+In the Main Menu, you can list available servers, join a server, or create a new server.
+
+How to Play Krypto:
+1. You will be given five cards, each with a number.
+2. The last one is the target number.
+3. Your goal is to use all 4 numbers exactly once, along with any combination of addition, subtraction, multiplication, and division, to reach the target number.
+4. You can use parentheses to group operations as needed.
+
+Example:
+Cards: 2, 3, 4, 5, 5
+Target: 5
+Solution: (5 / (3 + 2)) + 4 = 5
+
+Good luck and have fun!
+"""
     INVALID_OPTION = "Invalid option. Please try again.\n"
     NO_SERVERS = "No active servers available."
     ASK_SERVER_ID = "Enter the server ID to join: "
@@ -88,6 +96,7 @@ class MainServerMessages:
     OK = "ok"
     ERROR = "error"
     KILL_SERVER = "kill"
+    PLAYER_EXIT = "PLAYER_EXIT"
 
 class ServerClientMessages:
     """Messages between game servers and clients"""

@@ -61,14 +61,65 @@ class UserInterface:
         self.logger.info("User interface paused")
     
     def resume(self):
-        """Resume the UI after a game ends"""
-        if self.paused:
-            self.paused = False
+        """Resume the curses interface after it was paused"""
+        self.active = True
+        self.paused = False
+        
+        try:
+            # Reiniciar completamente la interfaz de curses
+            curses.endwin()  # Terminar definitivamente la sesión anterior
+            
+            # Inicializar una sesión completamente nueva
             self.stdscr = curses.initscr()
             curses.start_color()
+            curses.cbreak()
+            curses.noecho()
+            self.stdscr.keypad(True)
+            
+            # Ocultar el cursor
+            try:
+                curses.curs_set(0)
+            except:
+                pass  # Algunos terminales no soportan esta operación
+            
+            # Recrear todos los elementos de UI
             self.setup_colors()
             self.setup_windows()
-            self.logger.info("User interface resumed")
+            
+            # Limpiar completamente la pantalla
+            self.stdscr.clear()
+            self.stdscr.refresh()
+            
+            # Actualizar inmediatamente todos los elementos
+            self.update_header()
+            self.update_status("Back to main menu")
+            
+            # Iniciar directamente el menú principal
+            self.main_menu()
+        except Exception as e:
+            self.logger.error(f"Error resuming UI: {e}")
+            # Intentar recuperación de emergencia
+            curses.wrapper(self.main)
+    
+    def _resume_internal(self, stdscr):
+        """Método interno para reinicializar la interfaz dentro de wrapper"""
+        self.stdscr = stdscr
+        
+        # Setup básico
+        curses.cbreak()
+        curses.noecho()
+        stdscr.keypad(True)
+        
+        # Recrear configuración
+        self.setup_colors()
+        self.setup_windows()
+        
+        # Actualizar la pantalla inmediatamente
+        self.update_header()
+        self.update_status("Volviendo al menú principal...")
+        
+        # Continuar con el main menu
+        self.main_menu()
     
     def handle_interrupt(self, sig, frame):
         """Handle interrupt signal"""
@@ -76,6 +127,38 @@ class UserInterface:
         if self.stdscr:
             curses.endwin()
         self.logger.info("Received interrupt signal")
+    
+    def check_terminal_size(self):
+        """Check if terminal size is adequate and handle resize events"""
+        h, w = self.stdscr.getmaxyx()
+        min_h, min_w = 24, 80  # Dimensiones mínimas recomendadas
+        
+        if h < min_h or w < min_w:
+            # Terminal demasiado pequeña
+            self.stdscr.clear()
+            msg = f"Terminal muy pequeña. Tamaño mínimo: {min_w}x{min_h}"
+            if h > 0 and w > 0:  # Evitar errores si el tamaño es 0
+                try:
+                    self.stdscr.addstr(0, 0, msg[:w-1])
+                    self.stdscr.refresh()
+                except:
+                    pass
+            return False
+        return True
+    
+    def handle_resize(self):
+        """Handle terminal resize event"""
+        # Obtener el nuevo tamaño
+        curses.update_lines_cols()
+        
+        # Recrear ventanas con el nuevo tamaño
+        self.setup_windows()
+        
+        # Redibujar todo
+        self.stdscr.clear()
+        self.stdscr.refresh()
+        self.update_header()
+        self.update_status("Ventana redimensionada")
     
     def setup_colors(self):
         """Set up color pairs"""
@@ -98,35 +181,53 @@ class UserInterface:
         self.input_win = curses.newwin(2, max_x, max_y - 2, 0)
     
     def main(self, stdscr):
-        """Main curses function"""
+        """Main function that creates the UI"""
         self.stdscr = stdscr
         
-        # Basic setup
-        curses.curs_set(0)  # Hide cursor
+        # Setup
+        curses.cbreak()
+        curses.noecho()
+        stdscr.keypad(True)
+        
+        # Configurar colores y ventanas
         self.setup_colors()
         self.setup_windows()
         
-        # Welcome screen
+        # Guardar tamaño inicial para detectar redimensionamientos en Windows
+        self.last_terminal_size = self.stdscr.getmaxyx()
+        
+        # Intentar registrar manejador para SIGWINCH solo en sistemas compatibles
+        try:
+            import platform
+            if platform.system() != "Windows":
+                signal.signal(signal.SIGWINCH, self.handle_resize)
+            else:
+                self.logger.info("Resize handling not supported on Windows")
+        except Exception as e:
+            self.logger.warning(f"Could not register resize handler: {e}")
+        
+        # Mostrar bienvenida
         self.display_welcome()
-        
-        # Connect to server
-        if not self.user.connect_to_server():
-            self.display_message("Failed to connect to server. Press any key to exit.")
-            self.stdscr.getch()
-            return
-        
-        # Login loop
-        while not self.user.username and self.active:
-            if self.user.login():
-                break
-            time.sleep(1)
+
+        while not self.user.connect_to_server():
+            self.display_message("Failed to connect to server. Retrying...", self.COLOR_WARNING, wait_key=False)
+  
+        while not self.user.login():
+            self.display_message("Failed to login. Retrying...", self.COLOR_WARNING, wait_key=False)
         
         # Main menu loop
-        if self.user.username and self.active:
-            self.main_menu()
+        while self.active:    
+            try:
+                if self.check_terminal_size():
+                    self.main_menu()
+                else:
+                    time.sleep(0.5)
+            except curses.error as e:
+                self.logger.error(f"Curses error: {e}")
+                self.handle_resize()
         
-        # Exit
-        self.user.exit_game()
+        # Clean up
+        curses.endwin()
     
     def update_header(self):
         """Update the header window"""
@@ -278,7 +379,7 @@ class UserInterface:
             choice = self.menu(
                 "Main Menu",
                 {
-                    "1": "View Server List",
+                    "1": "Learn how to play",
                     "2": "Join Server",
                     "3": "Create Server",
                     "q": "Quit"
@@ -286,7 +387,7 @@ class UserInterface:
             )
             
             if choice == "1":
-                self.view_server_list()
+                self.show_tuturial()
             elif choice == "2":
                 self.join_server()
             elif choice == "3":
@@ -294,62 +395,77 @@ class UserInterface:
             elif choice == "q":
                 # Confirm before quitting
                 if self.confirm_dialog("Are you sure you want to quit?"):
+                    self.active = False
                     break
     
-    def view_server_list(self):
-        """View the list of available servers"""
-        pass
-    
-    def join_server(self):
-        """View list of available servers"""
+    def show_tuturial(self):
+        """Display the tutorial"""
+        self.display_message(IM.TUTORIAL, wait_key=True)
+
+    def _parse_server_list(self):
+        """Helper function to get and parse the server list from the server"""
         self.update_status("Getting server list...")
         server_list = self.user.get_server_list()
         
         if not server_list:
-            self.display_message("No servers available.", self.COLOR_WARNING)
-            return
+            return [], []
         
-        # Parse server details from the formatted strings
-        server_details = []
-        for server_str in server_list:
+        # Parse the server entries
+        parsed_servers = []
+        server_ids = []
+        
+        for i, server_str in enumerate(server_list):
             try:
-                # Extract server ID from string like "ID: abc123, Name: ..., Mode: ..."
+                # Extract server information
                 id_match = re.search(r"ID:\s*([^,]+)", server_str)
                 name_match = re.search(r"Name:\s*([^,]+)", server_str)
                 mode_match = re.search(r"Mode:\s*([^,]+)", server_str)
+                players_match = re.search(r"Players:\s*([^/]+)/([^,]+)", server_str)
                 
-                if id_match and name_match and mode_match:
+                if id_match and name_match and mode_match and players_match:
                     server_id = id_match.group(1).strip()
                     server_name = name_match.group(1).strip()
                     server_mode = mode_match.group(1).strip()
-                    server_details.append((server_id, f"{server_name} ({server_mode})"))
-                else:
-                    self.logger.warning(f"Couldn't parse server entry: {server_str}")
+                    current_players = players_match.group(1).strip()
+                    max_players = players_match.group(2).strip()
+                    
+                    # Format display string
+                    display_text = f"{server_name} ({server_mode}) - Players: {current_players}/{max_players}"
+                    
+                    parsed_servers.append(display_text)
+                    server_ids.append(server_id)
             except Exception as e:
                 self.logger.error(f"Error parsing server entry: {server_str} - {e}")
         
-        # No valid servers parsed
-        if not server_details:
-            self.display_message("No valid servers found.", self.COLOR_WARNING)
+        return parsed_servers, server_ids
+    
+    
+    def join_server(self):
+        """Join a server using the menu system"""
+        parsed_servers, server_ids = self._parse_server_list()
+        
+        if not parsed_servers:
+            self.display_message("No servers available.", self.COLOR_WARNING)
             return
         
-        # Build menu
-        options = {str(i): server_details[i-1][1] for i in range(1, len(server_details) + 1)}
-        options["c"] = "Cancel"
+        # Create options dictionary for the menu
+        options = {}
+        for i, server_text in enumerate(parsed_servers):
+            option_key = str(i+1)
+            options[option_key] = server_text
         
-        # Show menu
-        choice = self.menu(
-            "Available Servers",
-            options,
-            "Select a server to join:"
-        )
+        # Add back option
+        options["q"] = "Back to Main Menu"
         
-        if choice == "c":
-            return
+        # Display menu and handle selection
+        choice = self.menu("Join Server", options, "Select a server to join:")
         
-        # Join selected server
-        server_id = server_details[int(choice) - 1][0]
-        self.user.join_server(server_id)
+        if choice != "q" and choice.isdigit():
+            idx = int(choice) - 1
+            if 0 <= idx < len(server_ids):
+                server_name = options[choice].split(" (")[0]  # Get just the server name
+                self.update_status(f"Joining server {server_name}")
+                self.user.join_server(server_ids[idx])
     
     def create_server(self):
         """Create a new server"""
@@ -374,7 +490,7 @@ class UserInterface:
     
     def create_classic_server(self):
         """Create a classic mode server"""
-        server_name = self.get_input("Enter server name (or leave empty for random name):")
+        server_name = self.get_input("Enter server name:")
         max_players = self.get_input("Enter maximum players (1-8):", "8")
         
         try:
@@ -388,10 +504,7 @@ class UserInterface:
         
         
         self.update_status("Creating server...")
-        if self.user.create_server(server_name, "classic", max_players):
-            self.display_message("Server created successfully!", self.COLOR_SUCCESS)
-        else:
-            self.display_message("Failed to create server.", self.COLOR_ERROR)
+        self.user.create_server(server_name, "classic", max_players)
     
     def create_competitive_server(self):
         """Create a competitive mode server"""

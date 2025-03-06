@@ -10,7 +10,7 @@ from common.social import MainServerMessages as SM
 class AbstractGameServer(abc.ABC):
     """Abstract base class for different game server types"""
     
-    def __init__(self, name, port, puzzle_queue, message_queue, debug=False):
+    def __init__(self, name, port, puzzle_queue: Queue, message_queue: Queue, debug=False):
         self.name = name
         self.port = port
         self.puzzle_queue = puzzle_queue

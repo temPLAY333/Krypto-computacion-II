@@ -1,22 +1,16 @@
 import uuid
-import time
-import socket
 import asyncio
 import logging
 import threading
 import multiprocessing
-import sys
-import os
+from typing import Any, Dict, Optional
 
+from common.logger import Logger
 from common.social import LogMessages as Logs
 from common.social import UserMainMessages as UM
 from common.social import InterfaceMessages as IM
 from common.social import MainServerMessages as SM
-from common.logger import Logger
 from common.communication import Communication
-
-# Import the new centralized logger
-from common.logger import Logger
 
 from puzzle.logic import KryptoLogic
 from puzzle.server_factory import ServerFactory
@@ -52,10 +46,10 @@ class MainServer:
         # Start the message listener thread
         self.start_message_listener()
 
-        self.processes = {}  # Diccionario {pid: process}
-        self.servers = {}  # Diccionario {server_id: {"port": port, "name": name, "mode": mode}}
-        self.players = {}  # Dictionary to track connected players {username: {"id": player_id}}
-        self.pending_servers = {}  # Dictionary to track servers being created
+        self.processes: Dict[int, Any] = {}  # {pid: process}
+        self.servers: Dict[str, Dict[str, Any]] = {}  # {server_id: {"port": port, "name": name, ...}}
+        self.players: Dict[str, Dict[str, Any]] = {}  # {username: {"id": player_id, ...}}
+        self.pending_servers: Dict[int, Any] = {}   # Dictionary to track servers being created
         self.failed_servers = set()  # Set of PIDs that failed to start
 
         self.main_logger.info(f"MainServer initialized with host={host}, port={port}, max_servers={max_servers}, debug={debug}")
@@ -100,6 +94,7 @@ class MainServer:
             SM.OK: self.handle_server_ok,
             SM.ERROR: self.handle_server_error,
             SM.KILL_SERVER: self.handle_server_kill,
+            SM.PLAYER_EXIT: self.handle_player_exit
         }
         self.server_communication.define_all_commands(handlers)
         logging.info("Server command handlers registered")
@@ -251,8 +246,14 @@ class MainServer:
 
             server_list = []
             for server_id, details in self.servers.items():
+                # Usar .get() con valores por defecto para prevenir KeyError
+                server_name = details.get('name', 'Unnamed')
+                server_mode = details.get('mode', 'Unknown')
+                player_count = details.get('player_count', 0)
+                max_players = details.get('max_players', 8)
+                
                 server_list.append(
-                    f"ID: {server_id}, Name: {details['name']}, Mode: {details['mode']}"
+                    f"ID: {server_id}, Name: {server_name}, Mode: {server_mode}, Players: {player_count}/{max_players}"
                 )
             
             server_list_str = "\n".join(server_list)
@@ -270,33 +271,40 @@ class MainServer:
                 pass  # If we can't send the error, we just log it
 
     async def handle_server_choice(self, writer, server_id):
-        """Permite al jugador unirse a un servidor existente."""
+        """Handle a player's server choice"""
         addr = writer.get_extra_info('peername')
-        server_id = server_id.strip()  # Clean up any whitespace
-        logging.info(f"Join server request for '{server_id}' from {addr}")
+        server_id = str(server_id).strip()
+        logging.info(f"Server choice from {addr}: {server_id}")
         
-        try:
-            if server_id in self.servers:
-                server_details = self.servers[server_id]
-                server_name = server_details["name"]
-                server_port = server_details["port"]
-                server_mode = server_details["mode"]
-                
-                response = f"{UM.JOIN_SUCCESS}|{server_name}|{server_port}|{server_mode}"
-                await self.users_communication.send_message_async(writer, response)
-                Logger.log_outgoing(logging, addr, response)
-                logging.info(f"Client {addr} joining server {server_id} ({server_name})")
-            else:
-                # Debug which server IDs are available
-                available_ids = list(self.servers.keys())
-                logging.warning(f"Server ID '{server_id}' not found. Available IDs: {available_ids}")
-                
-                response = f"{UM.JOIN_FAIL}|Server not found or no longer available"
-                await self.users_communication.send_message_async(writer, response)
-                Logger.log_outgoing(logging, addr, response)
-                logging.warning(f"Client {addr} attempted to join nonexistent server {server_id}")
-        except Exception as e:
-            logging.error(f"Error processing join request for {server_id} from {addr}: {e}")
+        if server_id not in self.servers:
+            response = f"{UM.JOIN_FAIL}|Server not found"
+            await self.users_communication.send_message_async(writer, response)
+            Logger.log_outgoing(logging, addr, response)
+            return
+        
+        # Check if the server has reached its maximum capacity
+        server_details = self.servers[server_id]
+        current_players = server_details.get("player_count", 0)
+        max_players = server_details.get("max_players", 8)
+        
+        if current_players >= max_players:
+            response = f"{UM.JOIN_FAIL}|Server is full ({current_players}/{max_players})"
+            await self.users_communication.send_message_async(writer, response)
+            Logger.log_outgoing(logging, addr, response)
+            return
+        
+        # Server exists and has capacity, update player count
+        self.servers[server_id]["player_count"] = current_players + 1
+        
+        # Send server details to the player
+        name = self.servers[server_id]["name"]
+        port = self.servers[server_id]["port"]
+        mode = self.servers[server_id]["mode"]
+        
+        response = f"{UM.JOIN_SUCCESS}|{name}|{port}|{mode}"
+        await self.users_communication.send_message_async(writer, response)
+        Logger.log_outgoing(logging, addr, response)
+        logging.info(f"Player from {addr} joined server {name} ({current_players+1}/{max_players})")
 
     async def handle_create_server(self, writer, server_name, server_mode, number):
         """Crea un nuevo servidor y lo registra."""
@@ -306,19 +314,14 @@ class MainServer:
             # Validate server settings
             if not server_name or len(server_name) < 3:
                 response = f"{UM.CREATE_FAIL}|Invalid server name (minimum 3 characters)"
-                await self.users_communication.send_message_async(writer, response)
-                Logger.log_outgoing(logging, addr, response)
-                return
-                
-            if server_mode not in ["classic", "competitive"]:
+            elif server_mode not in ["classic", "competitive"]:
                 response = f"{UM.CREATE_FAIL}|Invalid game mode (must be 'classic' or 'competitive')"
-                await self.users_communication.send_message_async(writer, response)
-                Logger.log_outgoing(logging, addr, response)
-                return
-                
-            # Check if we've reached the maximum number of servers
-            if len(self.servers) >= self.max_servers:
+            elif len(self.servers) >= self.max_servers:
                 response = f"{UM.CREATE_FAIL}|Maximum number of servers reached"
+            else:
+                response = None
+
+            if response:
                 await self.users_communication.send_message_async(writer, response)
                 Logger.log_outgoing(logging, addr, response)
                 return
@@ -345,6 +348,8 @@ class MainServer:
                     "pid": server_pid,
                     "name": server_name, 
                     "mode": server_mode,
+                    "player_count": 0,
+                    "max_players": int(number),
                     "port": server_port
                 }
                 
@@ -353,19 +358,20 @@ class MainServer:
                 await self.users_communication.send_message_async(writer, response)
                 Logger.log_outgoing(logging, addr, response)
                 self.main_logger.info(f"Created server with ID '{server_id}' (PID: {server_pid}): {server_name} ({server_mode}) on port {server_port}")
+            
             except Exception as e:
                 logging.error(f"Error creating server process: {e}")
                 response = f"{UM.CREATE_FAIL}|Error starting server process"
                 await self.users_communication.send_message_async(writer, response)
                 Logger.log_outgoing(logging, addr, response)
+
         except Exception as e:
             logging.error(f"Error in create_server handler from {addr}: {e}")
-            try:
-                response = f"{UM.CREATE_FAIL}|Server error processing create request"
-                await self.users_communication.send_message_async(writer, response)
-                Logger.log_outgoing(logging, addr, response)
-            except:
-                pass  # If we can't send the error, we just log it
+
+            response = f"{UM.CREATE_FAIL}|Server error processing create request"
+            await self.users_communication.send_message_async(writer, response)
+            Logger.log_outgoing(logging, addr, response)
+
 
     async def handle_logout(self, writer):
         """Handle player logout"""
@@ -529,6 +535,29 @@ class MainServer:
                 self.main_logger.warning(f"Cannot terminate: No process found with PID {pid}")
         except Exception as e:
             self.main_logger.error(f"Error terminating process with PID {pid}: {e}")
+
+    async def handle_player_exit(self, writer, pid):
+        """Handle player exit notification from game server"""
+        try:
+            pid = int(pid)
+            
+            # Encontrar el servidor por PID
+            server_id_to_update = None
+            for server_id, details in self.servers.items():
+                if details.get("pid") == pid:
+                    server_id_to_update = server_id
+                    break
+                    
+            if server_id_to_update:
+                # Decrementar el contador de jugadores
+                current_count = self.servers[server_id_to_update].get("player_count", 1)
+                new_count = max(0, current_count - 1)  # Asegurar que no sea negativo
+                self.servers[server_id_to_update]["player_count"] = new_count
+                self.main_logger.debug(f"Player exited from server {server_id_to_update}. New player count: {new_count}")
+            else:
+                self.main_logger.warning(f"Received player exit for unknown server PID {pid}")
+        except Exception as e:
+            self.main_logger.error(f"Error handling player exit: {e}")
 
     async def shutdown(self):
         """Clean shutdown of the main server"""

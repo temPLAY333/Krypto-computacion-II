@@ -126,6 +126,7 @@ class ClassicInterface(PlayerInterface):
         if user_input.lower() == 'exit':
             self.running = False
             self.player.exit_game()
+            self.shutdown()
             return
             
         # Block other commands if input is disabled
@@ -137,6 +138,16 @@ class ClassicInterface(PlayerInterface):
             self.player.surrender()
         else:
             self.player.submit_solution(user_input)
+        
+    def shutdown(self):
+        """Clean up resources when shutting down"""
+        self.running = False
+        try:
+            # Asegurarse de limpiar la pantalla antes de salir
+            curses.endwin()
+        except Exception as e:
+            self.logger.error(f"Error shutting down interface: {e}")
+        self.logger.info("Classic interface shut down")
         
     def _draw_message_window(self, win):
         """Draw the message window"""
@@ -257,3 +268,5 @@ class ClassicInterface(PlayerInterface):
             except (EOFError, KeyboardInterrupt):
                 return None
         return None
+
+        

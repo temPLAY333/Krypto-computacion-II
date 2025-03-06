@@ -133,6 +133,8 @@ class ClassicServer(AbstractGameServer):
             
             # Broadcast updated stats to remaining clients only
             if len(active_clients) > 0:
+                self.message_queue.put(f"{SM.PLAYER_EXIT}|{os.getpid()}")
+                
                 await self.broadcast_game_stats()
                 await asyncio.sleep(0.5)
 

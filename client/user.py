@@ -213,7 +213,6 @@ class User:
                 self.logger.error("Connection test failed: invalid response")
                 return False
                 
-            self.ui.display_message(IM.GREETING)
             self.logger.info("Connected to server")
             return True
         except socket.timeout:
@@ -373,7 +372,6 @@ class User:
             )
             
             if player:
-                self.ui.display_message(f"Connected to {server_name}. Starting game...")
                 self.logger.info(f"Connected to game server: {server_name}:{server_port}")
                 
                 # Hide the user User interface
