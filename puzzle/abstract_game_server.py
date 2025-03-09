@@ -22,6 +22,10 @@ class AbstractGameServer(abc.ABC):
         # Configure logger
         self.logger = logging.getLogger(f"GameServer-{name}")
         self.logger.setLevel(logging.DEBUG if debug else logging.INFO)
+
+        # Iniciar temporizador de autodestrucción (60 segundos sin jugadores)
+        self.idle_timer = None
+        self.idle_timer_active = False
         
     def start(self):
         """Start the game server"""
@@ -40,6 +44,32 @@ class AbstractGameServer(abc.ABC):
             self.message_queue.put(f"{SM.ERROR}|{os.getpid()}|{str(e)}")
             import traceback
             self.logger.error(traceback.format_exc())
+    
+    async def start_idle_timer(self):
+        """Start a timer that will shut down the server if no players join within 60 seconds"""
+        try:
+            self.logger.info("Starting 60-second idle timer for player connection")
+            
+            # Esperar 60 segundos
+            await asyncio.sleep(60)
+            
+            # Solo continuar si el temporizador sigue activo
+            if self.idle_timer_active:
+                # Verificar si hay jugadores activos
+                active_clients = {cid: data for cid, data in self.clients.items() 
+                                if not data.get("disconnected", False)}
+                
+                if not active_clients:
+                    self.logger.info("No players joined within 60 seconds. Auto-shutting down server.")
+                    self.message_queue.put(f"{SM.KILL_SERVER}|{os.getpid()}")
+                else:
+                    self.logger.info(f"Players have joined ({len(active_clients)}). Server will continue running.")
+                    self.idle_timer_active = False
+                    
+        except asyncio.CancelledError:
+            self.logger.debug("Idle timer was cancelled because players joined")
+        except Exception as e:
+            self.logger.error(f"Error in idle timer: {e}")
     
     def enable_debug(self):
         """Enable debug mode"""
@@ -79,6 +109,10 @@ class AbstractGameServer(abc.ABC):
             )
             
             self.logger.info(f"Game server running on port {self.port}")
+
+            self.idle_timer_active = True
+            self.idle_timer = asyncio.create_task(self.start_idle_timer())
+        
             
             async with server:
                 await server.serve_forever()
@@ -90,11 +124,6 @@ class AbstractGameServer(abc.ABC):
     @abc.abstractmethod
     def get_initial_puzzles(self):
         """Get initial puzzles for the game - must be implemented by subclasses"""
-        pass
-    
-    @abc.abstractmethod
-    def check_after_solution(self, client_id, solution):
-        """Check what happens after a solution is submitted - must be implemented by subclasses"""
         pass
     
     @abc.abstractmethod
@@ -112,6 +141,7 @@ class AbstractGameServer(abc.ABC):
         try:
             if not self.puzzle_queue.empty():
                 next_puzzle = self.puzzle_queue.get()
+                self.message_queue.put(f"{SM.OK}|{os.getpid()}")
                 self.logger.info(f"Got new puzzle from queue: {next_puzzle}")
                 return next_puzzle
             else:

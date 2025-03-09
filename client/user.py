@@ -94,13 +94,25 @@ class User:
             self.server_list = []
             self.logger.info("No servers are currently available")
         else:
-            # Process regular server list
-            self.server_list = server_list_str.split('\n') if server_list_str else []
-            # Filter out any empty strings
-            self.server_list = [s for s in self.server_list if s.strip()]
+            self.server_list = []
+            
+            # Process regular server list - IMPORTANTE: Procesar solo aquí, no tratar como comandos
+            servers = server_list_str.split('\n') if server_list_str else []
+            
+            # Filter out empty strings and add to server list
+            for server in servers:
+                if server.strip():
+                    self.server_list.append(server.strip())
+                    # Solo loggear, no ejecutar como comando
+                    self.logger.debug(f"Added server to list: {server}")
+            
             self.logger.info(f"Received server list with {len(self.server_list)} servers")
         
         self.command_results["server_list"] = self.server_list
+        
+        # IMPORTANTE: Procesar cualquier mensaje adicional en el buffer
+        # para evitar interpretar líneas de servidores como comandos
+        self._process_remaining_buffer()
     
     def handle_join_success(self, *args):
         """Handle successful join response"""
@@ -160,6 +172,34 @@ class User:
             else:
                 self.ui.display_message("Opción inválida. Por favor, ingrese '4' para IPv4 o '6' para IPv6.")
                 self.logger.warning("Invalid IP version selected")
+    
+    def _process_remaining_buffer(self):
+        """Process any remaining data in the communication buffer"""
+        try:
+            # Verificar si hay más datos en el buffer de comunicación
+            if hasattr(self.communication, 'buffer') and self.communication.buffer:
+                # Si estos datos contienen información de servidores, no son comandos
+                if self.communication.buffer.startswith("ID:"):
+                    self.logger.debug("Found server entries in buffer, clearing to prevent misinterpretation")
+                    # Si empieza con "ID:", es parte de la lista de servidores
+                    while self.communication.buffer.startswith("ID:"):
+                        if '\n' in self.communication.buffer:
+                            # Extraer esta entrada y añadirla a server_list
+                            entry, self.communication.buffer = self.communication.buffer.split('\n', 1)
+                            if entry.strip():
+                                self.server_list.append(entry.strip())
+                                self.logger.debug(f"Added remaining server from buffer: {entry}")
+                        else:
+                            # No hay más saltos de línea, añadir el resto y limpiar
+                            if self.communication.buffer.strip():
+                                self.server_list.append(self.communication.buffer.strip())
+                                self.logger.debug(f"Added final server from buffer: {self.communication.buffer}")
+                            self.communication.buffer = ""
+                            
+                    # Actualizar command_results con la lista completa
+                    self.command_results["server_list"] = self.server_list
+        except Exception as e:
+            self.logger.error(f"Error processing remaining buffer: {e}")
     
     def create_socket(self):
         """Crea un socket para la conexión."""

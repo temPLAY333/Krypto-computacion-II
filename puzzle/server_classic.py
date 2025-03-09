@@ -18,17 +18,9 @@ class ClassicServer(AbstractGameServer):
         self.logger = logging.getLogger(f"ClassicServer-{name}")
         self.logger.setLevel(logging.DEBUG if debug else logging.INFO)
         
-        # Player tracking
-        self.player_usernames = {}  # Map client_id to username
-        self.solved_count = 0
-        self.total_players = 0
+         # Estructura unificada de tracking de jugadores
+        self.players = {}  # {client_id: {"username": name, "state": None|"correct"|"surrendered"}}
         self.max_players = max_players
-        
-        # Add game stats tracking
-        self.stats = {
-            "correct_answers": 0,
-            "surrendered": 0
-        }
         
         # Initialize Communication
         self.comm = Communication(logger=self.logger)
@@ -64,22 +56,35 @@ class ClassicServer(AbstractGameServer):
         if not args:
             await self.comm.send_message_async(writer, f"{SCM.ERROR}|Invalid solution format\n")
             return
-            
+                
         solution = str(args[0])
         
-        # Store username if provided
+        # Inicializar datos del jugador si no existen
+        if client_id not in self.players:
+            self.players[client_id] = {"username": client_id, "state": None}
+        
+        # Actualizar username si se proporcionó
         if len(args) > 1:
-            self.player_usernames[client_id] = args[1]
-            
-        # Validate solution
+            self.players[client_id]["username"] = args[1]
+        
+        username = self.players[client_id]["username"]
+        
+        # Verificar si el jugador ya ha contribuido al puzzle actual
+        if self.players[client_id]["state"] is not None:
+            self.logger.warning(f"Player {username} already submitted for this puzzle: {self.players[client_id]['state']}")
+            await self.comm.send_message_async(writer, f"{SCM.SOLUTION_INCORRECT}|You already submitted for this puzzle\n")
+            return
+                
+        # Validar solución
         if self.validate_solution(solution):
-            # First send the correct solution response
+            # Enviar respuesta de correcto
             await self.comm.send_message_async(writer, f"{SCM.SOLUTION_CORRECT}\n")
-            self.logger.info(f"Player {self.player_usernames.get(client_id, client_id)} answered correctly")
+            self.logger.info(f"Player {username} answered correctly")
             
-            # Update stats
-            self.stats["correct_answers"] += 1
+            # Actualizar estado del jugador
+            self.players[client_id]["state"] = "correct"
             
+            # Verificar estado del juego
             await asyncio.sleep(0.5)
             if not await self.check_puzzle_completion_status():
                 await self.broadcast_game_stats()
@@ -90,20 +95,31 @@ class ClassicServer(AbstractGameServer):
         """Handle PLAYER_SURRENDER command"""
         client_id = self.get_client_id_from_writer(writer)
         
+        # Inicializar datos del jugador si no existen
+        if client_id not in self.players:
+            self.players[client_id] = {"username": client_id, "state": None}
+        
+        # Actualizar username si se proporcionó
         if args:
-            username = args[0]
-            self.player_usernames[client_id] = username
-            self.logger.info(f"Player {username} surrendered")
-        else:
-            self.logger.info(f"Player {client_id} surrendered")
+            self.players[client_id]["username"] = args[0]
         
-        # Update stats for surrender
-        self.stats["surrendered"] += 1
+        username = self.players[client_id]["username"]
         
-        # Send surrender acknowledgment
+        # Verificar si el jugador ya ha contribuido al puzzle actual
+        if self.players[client_id]["state"] is not None:
+            self.logger.warning(f"Player {username} already submitted for this puzzle: {self.players[client_id]['state']}")
+            await self.comm.send_message_async(writer, f"{SCM.SURRENDER_STATUS}|You already submitted for this puzzle\n")
+            return
+        
+        self.logger.info(f"Player {username} surrendered")
+        
+        # Actualizar estado del jugador
+        self.players[client_id]["state"] = "surrendered"
+        
+        # Enviar confirmación de rendición
         await self.comm.send_message_async(writer, f"{SCM.SURRENDER_STATUS}|disable_input\n")
         
-        # Broadcast updated stats
+        # Verificar estado del juego
         await asyncio.sleep(0.5)
         if not await self.check_puzzle_completion_status():
             await self.broadcast_game_stats()
@@ -113,36 +129,35 @@ class ClassicServer(AbstractGameServer):
         """Handle PLAYER_EXIT command"""
         client_id = self.get_client_id_from_writer(writer)
         
-        if args:
-            username = args[0]
-            self.player_usernames[client_id] = username
+        # Obtener username
+        username = client_id
+        if client_id in self.players:
+            if args:  # Si se proporciona username en el mensaje
+                self.players[client_id]["username"] = args[0]
+            username = self.players[client_id]["username"]
         
-        self.logger.info(f"Player {self.player_usernames.get(client_id, client_id)} exited")
+        state = "none"
+        if client_id in self.players:
+            state = self.players[client_id].get("state", "none")
         
-        # Mark client as disconnected to prevent further communication attempts
+        self.logger.info(f"Player {username} exited with state: {state}")
+        
         if client_id in self.clients:
             self.clients[client_id]["disconnected"] = True
             
-            # Update stats after player exit but don't try to send to the exiting client
-            disconnected_client = client_id
             active_clients = {cid: data for cid, data in self.clients.items() 
-                            if cid != disconnected_client and not data.get("disconnected", False)}
-                            
-            # Remove client from tracking
+                             if cid != client_id and not data.get("disconnected", False)}
+                             
             del self.clients[client_id]
             
-            # Broadcast updated stats to remaining clients only
-            if len(active_clients) > 0:
+            if active_clients:
                 self.message_queue.put(f"{SM.PLAYER_EXIT}|{os.getpid()}")
-                
                 await self.broadcast_game_stats()
                 await asyncio.sleep(0.5)
-
                 await self.check_puzzle_completion_status()
             else:
                 self.logger.info("All players have disconnected")
                 self.message_queue.put(f"{SM.KILL_SERVER}|{os.getpid()}")
-        return
     
     def get_client_id_from_writer(self, writer):
         """Get client ID from writer object"""
@@ -158,52 +173,37 @@ class ClassicServer(AbstractGameServer):
         except Exception as e:
             self.logger.error(f"Error getting initial puzzles: {e}")
             return None
-            
-    def check_after_solution(self, client_id, solution): # Borrar a la brevedad
-        """Check what happens after a solution is submitted in classic mode
-        
-        In classic mode, when a solution is correct, we get a new puzzle for everyone
-        """
-        self.solved_count += 1
-        self.logger.info(f"Player {self.player_usernames.get(client_id, 'unknown')} solved the puzzle")
-        
-        # Get new puzzle
-        new_puzzle = self.get_next_puzzle()
-        if new_puzzle:
-            self.logger.info(f"New puzzle set: {new_puzzle}")
-            # Reset solved count for new puzzle
-            self.solved_count = 0
-            # Broadcast to all clients
-            return new_puzzle
-        else:
-            self.logger.error("Failed to get next puzzle")
-            return None
     
     async def check_puzzle_completion_status(self):
         """Check if all players have completed the current puzzle and send new if needed"""
-        # Count only active clients
+        # Contar sólo clientes activos
         active_clients = {cid: data for cid, data in self.clients.items() 
-                        if not data.get("disconnected", False)}
+                         if not data.get("disconnected", False)}
         total_players = len(active_clients)
         
-        # Check if all players completed the puzzle
-        if total_players > 0 and total_players <= self.stats["correct_answers"] + self.stats["surrendered"]:
-            # Get new puzzle
+        # Calcular estadísticas a partir de los estados
+        correct_answers = sum(1 for cid in active_clients if cid in self.players and self.players[cid]["state"] == "correct")
+        surrendered = sum(1 for cid in active_clients if cid in self.players and self.players[cid]["state"] == "surrendered")
+        
+        # Verificar si todos los jugadores han completado el puzzle
+        if total_players > 0 and total_players <= correct_answers + surrendered:
+            # Obtener nuevo puzzle
             new_puzzle = self.get_next_puzzle()
             if new_puzzle:
                 self.logger.info(f"All players completed the puzzle. Sending new puzzle: {new_puzzle}")
                 self.current_puzzle = new_puzzle
                 
-                # Reset stats for new puzzle
-                self.stats["correct_answers"] = 0
-                self.stats["surrendered"] = 0
+                # Resetear estados para el nuevo puzzle
+                for client_id in self.players:
+                    if client_id in active_clients:  # Solo para clientes conectados
+                        self.players[client_id]["state"] = None
                 
-                # Send new puzzle to all clients
+                # Enviar nuevo puzzle a todos los clientes
                 await self.broadcast_message(f"{SCM.NEW_PUZZLE}|{new_puzzle}\n")
                 
-                return True  # Puzzle was updated
+                return True  # Puzzle actualizado
         
-        return False  # No need for a new puzzle
+        return False  # No necesita nuevo puzzle
             
     async def handle_client_connection(self, reader, writer):
         """Handle a client connection"""
@@ -211,6 +211,11 @@ class ClassicServer(AbstractGameServer):
         client_id = f"{addr[0]}:{addr[1]}"
         
         self.logger.info(f"New client connected: {client_id}")
+
+        # Cancelar el temporizador de inactividad si es el primer cliente
+        if self.idle_timer_active and len(self.clients) == 0:
+            self.logger.info("First player joined. Canceling idle timer.")
+            self.idle_timer_active = False
         
         # Add client to tracking
         self.clients[client_id] = {
@@ -265,28 +270,24 @@ class ClassicServer(AbstractGameServer):
     async def broadcast_game_stats(self):
         """Broadcast current game statistics to all connected clients"""
         try:
-            # Count only clients that are still connected
+            # Contar sólo clientes activos
             active_clients = {cid: data for cid, data in self.clients.items() 
-                            if not data.get("disconnected", False)}
+                             if not data.get("disconnected", False)}
             
             total_players = len(active_clients)
-            correct_answers = self.stats["correct_answers"]
-            surrendered = self.stats["surrendered"]
             
-            # Format the game status message
+            # Calcular estadísticas a partir de los estados
+            correct_answers = sum(1 for cid in active_clients if cid in self.players and self.players[cid]["state"] == "correct")
+            surrendered = sum(1 for cid in active_clients if cid in self.players and self.players[cid]["state"] == "surrendered")
+            
+            # Formatear mensaje de estado
             message = f"{SCM.GAME_STATUS}|{total_players}|{correct_answers}|{surrendered}\n"
             
             self.logger.debug(f"Broadcasting stats: Players={total_players}, Correct={correct_answers}, Surrendered={surrendered}")
             
-            # Broadcast to all clients
+            # Broadcast a todos los clientes
             await self.broadcast_message(message)
             
-            # Log if puzzles should reset but aren't
-            if total_players > 0 and total_players <= correct_answers + surrendered:
-                self.logger.warning(f"All players ({total_players}) have completed the puzzle "
-                                f"({correct_answers} correct, {surrendered} surrendered). "
-                                f"A new puzzle should be sent.")
-                
         except Exception as e:
             self.logger.error(f"Failed to broadcast game stats: {e}")
             
