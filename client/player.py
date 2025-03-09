@@ -77,9 +77,9 @@ class Player:
             )
             
             # Send username to identify
+            self.start_listener() 
             self.communication.send_message(self.socket, f"{PSM.GREETING}|{self.username}")
             
-            self.start_listener() 
             self.connected = True
             self.logger.info(f"Connected to game server" + (" using IPv6" if self.using_ipv6 else " using IPv4"))
             return True
@@ -90,45 +90,37 @@ class Player:
     
     def start_listener(self):
         """Start thread to listen for server messages"""
-        thread = threading.Thread(target=self.listen_for_messages, daemon=True)
-        thread.start()
+        self.listener_thread = threading.Thread(target=self.listen_for_messages)
+        self.listener_thread.daemon = True
+        self.listener_thread.start()
         
     def listen_for_messages(self):
         """Listen for messages from server"""
-        self.logger.info("Starting message listener thread")
-        
-        while self.connected:
-            try:
-                success, message = self.communication.receive_message(self.socket)
-                if not success:
-                    self.logger.error("Connection lost")
-                    self.connected = False
+        self.listener_running = True
+        try:
+            while self.listener_running and self.socket:
+                try:
+                    # CORREGIR: Separar los dos valores de la tupla
+                    success, message = self.communication.receive_message(self.socket)
+                    
+                    # Solo procesar mensajes válidos
+                    if success and message:
+                        self.logger.debug(f"Received message: '{message}'")
+                        self.communication.handle_sync_command(message)
+                    elif not success:
+                        # Error de conexión
+                        if self.listener_running:
+                            self.logger.warning("Connection error")
+                        break
+                except Exception as e:
+                    if self.listener_running:
+                        self.logger.error(f"Receive error: {e}")
                     break
-                    
-                if message:
-                    self.logger.debug(f"Raw message received: '{message}'")
-                    
-                    # Process message
-                    self.communication.handle_sync_command(message)
-                    
-                    # Process any additional complete messages in buffer
-                    while self.connected and self.communication.has_complete_message():
-                        success, next_message = self.communication.get_next_message()
-                        if success:
-                            self.logger.debug(f"Processing additional message from buffer: '{next_message}'")
-                            self.communication.handle_sync_command(next_message)
-                    
-                    # Force immediate UI refresh after processing all messages
-                    if self.interface and hasattr(self.interface, 'request_refresh'):
-                        self.interface.request_refresh()
-                            
-            except Exception as e:
-                self.logger.error(f"Error in listener: {e}")
-                if self.debug:
-                    import traceback
-                    self.logger.error(traceback.format_exc())
-                self.connected = False
-                break
+        except Exception as e:
+            if self.listener_running:
+                self.logger.error(f"Connection lost: {e}")
+        finally:
+            self.listener_running = False
     
     def request_puzzle(self):
         """Request a puzzle from server"""
@@ -173,36 +165,29 @@ class Player:
             self.logger.error(f"Failed to surrender: {e}")
     
     def exit_game(self):
-        """Exit the game"""
+        """Exit the game and disconnect from server"""
         try:
-            if self.connected:
-                # Primero marcar como desconectado para detener el listener thread
-                self.connected = False
-                
-                # Enviar mensaje de salida de forma ordenada
-                try:
-                    message = f"{PSM.PLAYER_EXIT}|{self.username}"
-                    self.communication.send_message(self.socket, message)
-                    
-                    # Esperar brevemente para que el mensaje se envíe completamente
-                    time.sleep(0.5)
-                except Exception as e:
-                    self.logger.warning(f"Error al enviar mensaje de salida: {e}")
-            
-            # Cerrar socket después de enviar mensajes
             if hasattr(self, 'socket') and self.socket:
-                try:
-                    self.socket.shutdown(socket.SHUT_RDWR)  # Cerrar ordenadamente
-                except:
-                    pass  # El socket ya podría estar cerrado
+                # Primero señalizar al hilo de escucha que debe detenerse
+                self.listener_running = False
                 
+                # Dar tiempo al hilo para ver la bandera
+                time.sleep(0.1)
+                
+                # Enviar mensaje de salida si es posible
                 try:
-                    self.socket.close()
+                    self.communication.send_message(self.socket, f"{PSM.PLAYER_EXIT}")
                 except:
                     pass
                 
+                # Ahora cerrar el socket
+                self.socket.close()
                 self.socket = None
                 
+                # Esperar a que el hilo de escucha termine
+                if hasattr(self, 'listener_thread') and self.listener_thread.is_alive():
+                    self.listener_thread.join(timeout=1.0)
+                    
             self.logger.info("Desconectado del servidor")
         except Exception as e:
             self.logger.error(f"Error durante la desconexión: {e}")

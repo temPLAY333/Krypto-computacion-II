@@ -7,6 +7,7 @@ from queue import Empty, Queue
 
 from common.social import MainServerMessages as SM
 from common.social import ServerClientMessages as SCM
+from common.logger import Logger
 from common.network import NetworkManager
 
 class AbstractGameServer(abc.ABC):
@@ -22,8 +23,8 @@ class AbstractGameServer(abc.ABC):
         self.debug_enabled = debug
         
         # Configure logger
-        self.logger = logging.getLogger(f"GameServer-{name}")
-        self.logger.setLevel(logging.DEBUG if debug else logging.INFO)
+        self.logger = Logger.get(f"GameServer-{name}")
+        Logger.configure(debug)
 
         # Iniciar temporizador de autodestrucción (60 segundos sin jugadores)
         self.idle_timer = None

@@ -1,8 +1,6 @@
 import os
 import asyncio
-import logging
 
-from common.logger import Logger
 from common.social import ServerClientMessages as SCM
 from common.social import PlayerServerMessages as PSM
 from common.social import MainServerMessages as SM
@@ -16,7 +14,6 @@ class ClassicServer(AbstractGameServer):
     def __init__(self, name, port, puzzle_queue, message_queue, max_players=8, debug=False):
         super().__init__(name, port, puzzle_queue, message_queue, debug)
         self.mode = "classic"
-        self.logger = Logger.get(f"ClassicServer-{name}", debug)
         
          # Estructura unificada de tracking de jugadores
         self.players = {}  # {client_id: {"username": name, "state": None|"correct"|"surrendered"}}
@@ -284,7 +281,7 @@ class ClassicServer(AbstractGameServer):
             if client_id in self.clients:
                 self.clients[client_id]["disconnected"] = True
             
-    def validate_solution(self, solution:str):
+    def validate_solution(self, solution: str):
         """Validate a solution against the current puzzle
         
         In a complete implementation, this would verify the solution against the puzzle.
@@ -293,6 +290,21 @@ class ClassicServer(AbstractGameServer):
         try:
             if not self.current_puzzle:
                 return False
+            
+            # Extract numbers and operations from the solution
+            numbers = [int(s) for s in solution if s.isdigit()]
+            operations = [s for s in solution if s in '+-*.xX/:%']
+            
+            # Check if the solution uses exactly 4 numbers and 3 operations
+            if len(numbers) != 4 or len(operations) != 3:
+                return False
+            
+            # Check if the numbers used are the same as in the puzzle
+            puzzle_numbers = self.current_puzzle[0:4]
+            for num in numbers:
+                if num not in puzzle_numbers:
+                    return False
+                puzzle_numbers.remove(num)
             
             # Validate solution using logic module
             return KryptoLogic.verify_solution(solution, self.current_puzzle[-1])

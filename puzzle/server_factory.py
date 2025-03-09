@@ -1,6 +1,5 @@
 import os
 import socket
-import logging
 import multiprocessing
 from queue import Queue
 
@@ -10,6 +9,8 @@ from common.network import NetworkManager
 
 from puzzle.server_classic import ClassicServer
 from puzzle.server_competitive import CompetitiveServer
+
+logger = Logger.get("ServerFactory", True)
 
 class ServerFactory:
     """Factory class for creating different types of game servers"""
@@ -21,10 +22,8 @@ class ServerFactory:
         self.message_queue = message_queue
         self.next_port = 5001
         self.debug = debug
-
-        self.logger = Logger.get("ServerFactory", debug)
         
-        self.logger.info(f"Server factory initialized on host: {host}")
+        logger.info(f"Server factory initialized on host: {host}")
     
     def create_server(self, name, mode, max_players):
         """Create a new server of the specified type"""
@@ -35,7 +34,7 @@ class ServerFactory:
             # Create server instance based on mode
             server_class = self.get_server_class(mode)
             if not server_class:
-                self.logger.error(f"Invalid server mode: {mode}")
+                logger.error(f"Invalid server mode: {mode}")
                 return None
             
             # Set up port
@@ -49,11 +48,11 @@ class ServerFactory:
             process.daemon = True
             process.start()
             
-            self.logger.info(f"Created {mode} server '{name}' with PID {process.pid} on {self.host}:{port}")
+            logger.info(f"Created {mode} server '{name}' with PID {process.pid} on {self.host}:{port}")
             return process.pid, port, process  # Return the process object as well
             
         except Exception as e:
-            self.logger.error(f"Failed to create server: {e}")
+            logger.error(f"Failed to create server: {e}")
             return None
     
     def get_server_class(self, mode):
@@ -107,7 +106,7 @@ class ServerFactory:
             
             # Si es IPv4, usar un socket IPv4 forzosamente
             if not host_is_ipv6 and NetworkManager.is_ipv6_available():
-                logging.info(f"Host '{host}' es IPv4, usando socket IPv4 aunque IPv6 esté disponible")
+                logger.info(f"Host '{host}' es IPv4, usando socket IPv4 aunque IPv6 esté disponible")
                 use_ipv6 = False
             else:
                 use_ipv6 = NetworkManager.is_ipv6_available()
@@ -118,6 +117,6 @@ class ServerFactory:
             
         except Exception as e:
             # Log and notify main server of error with proper format
-            logging.error(f"Error in game server: {e}")
+            logger.error(f"Error in game server: {e}")
             message_queue.put(f"{SM.ERROR}|{os.getpid()}|{str(e)}")
 

@@ -4,6 +4,7 @@ import asyncio
 import logging
 import threading
 import multiprocessing
+from queue import Queue, Empty
 from typing import Any, Dict, Optional
 
 from common.logger import Logger
@@ -48,9 +49,6 @@ class MainServer:
         # Register command handlers for both communication channels
         self.register_user_command_handlers()
         self.register_server_command_handlers()
-
-        # Start the message listener thread
-        self.start_message_listener()
 
         self.processes: Dict[int, Any] = {}  # {pid: process}
         self.servers: Dict[str, Dict[str, Any]] = {}  # {server_id: {"port": port, "name": name, ...}}
@@ -435,36 +433,41 @@ class MainServer:
     
     def start_message_listener(self):
         """Start a separate thread to listen for messages"""
-        # Capture the main event loop reference before creating the thread
-        main_loop = asyncio.get_event_loop()
         message_logger = logging.getLogger("message_listener")
+        self.shutdown_event = threading.Event()  # Evento para señalizar el cierre
         
         def listener_thread():
             message_logger.info("Message listener thread started")
-            while True:
+            while not self.shutdown_event.is_set():  # Verificar si se debe detener
                 try:
-                    # This blocks until a message is available without wasting CPU
-                    message = self.message_queue.get()
-                    Logger.log_incoming(message_logger, "GameServer", message)
-                    
-                    # Debug print only if debug is enabled
-                    if self.debug:
-                        print(f"Debug - Received message from GameServer: {message}")
-                    
-                    # Run the coroutine directly in a new event loop inside this thread
-                    local_loop = asyncio.new_event_loop()
+                    # Usar get con timeout para poder verificar el evento periódicamente
                     try:
-                        local_loop.run_until_complete(self.process_message(message))
-                    finally:
-                        local_loop.close()
-                    
+                        message = self.message_queue.get(timeout=0.5)
+                        Logger.log_incoming(message_logger, "GameServer", message)
+                        
+                        # Debug print only if debug is enabled
+                        if self.debug:
+                            print(f"Debug - Received message from GameServer: {message}")
+                        
+                        # Run the coroutine directly in a new event loop inside this thread
+                        local_loop = asyncio.new_event_loop()
+                        try:
+                            local_loop.run_until_complete(self.process_message(message))
+                        finally:
+                            local_loop.close()
+                    except Empty:
+                        # Timeout - solo continuar para comprobar shutdown_event
+                        pass
+                        
                 except Exception as e:
                     message_logger.error(f"Error in message listener thread: {e}")
                     import traceback
                     message_logger.error(traceback.format_exc())
+                    
+            message_logger.info("Message listener thread stopped")
         
-        thread = threading.Thread(target=listener_thread, daemon=True)
-        thread.start()
+        self.listener_thread = threading.Thread(target=listener_thread, daemon=True)
+        self.listener_thread.start()
         self.main_logger.info("Message listener thread started")
 
     async def process_message(self, message):
@@ -626,10 +629,18 @@ class MainServer:
         """Clean shutdown of the main server"""
         logging.info("Shutting down MainServer...")
         
+        # Señalizar al hilo de escucha que debe terminar
+        if hasattr(self, 'shutdown_event'):
+            self.shutdown_event.set()
+            
+        # Esperar a que el hilo termine (opcional)
+        if hasattr(self, 'listener_thread') and self.listener_thread.is_alive():
+            self.listener_thread.join(timeout=2.0)
+        
         # Terminate all game server processes
         for pid in list(self.processes.keys()):
             self.terminate_server_process(pid)
-            
+                
         # Clear all data structures
         self.servers.clear()
         self.players.clear()
