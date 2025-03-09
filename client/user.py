@@ -1,9 +1,11 @@
 import re
+import os
 import socket
 
 from common.social import UserMainMessages as UM
 from common.social import InterfaceMessages as IM
 from common.communication import Communication
+from common.network import NetworkManager
 from client.player_factory import create_player
 from client.user_interface import UserInterface
 
@@ -13,7 +15,15 @@ from common.logger import Logger
 class User:
     """User class that handles communication with the main server"""
     
-    def __init__(self, server_host='localhost', server_port=5000, test_mode=False):
+    def __init__(self, server_host=None, server_port=5000, test_mode=False):
+        # Si no se especifica server_host, intentamos detectar una IP razonable
+        if server_host is None:
+            # Intentar obtener la IP del servidor del entorno si está disponible
+            server_host = os.environ.get('KRYPTO_SERVER', '')
+            if not server_host:
+                # Usar una dirección IP genérica
+                server_host = '127.0.0.1'  # IPv4 genérica en lugar de 'localhost'
+   
         self.server_host = server_host
         self.server_port = server_port
         self.username = None
@@ -116,16 +126,18 @@ class User:
     
     def handle_join_success(self, *args):
         """Handle successful join response"""
-        if len(args) >= 2:
+        if len(args) >= 3:
             server_name = args[0]
-            server_port = args[1]
-            game_type = args[2] if len(args) >= 3 else "classic"
+            server_host = args[1]  # La IP del servidor
+            server_port = args[2]
+            game_type = args[3] if len(args) >= 4 else "classic"
             
-            self.logger.info(f"Successfully joined server {server_name} on port {server_port}")
+            self.logger.info(f"Successfully joined server {server_name} on {server_host}:{server_port}")
             self.ui.display_message(f"Successfully joined server {server_name}", self.ui.COLOR_SUCCESS)
             
             self.command_results["join"] = True
             self.command_results["server_name"] = server_name
+            self.command_results["server_host"] = server_host  # Guardar el host
             self.command_results["server_port"] = server_port
             self.command_results["game_type"] = game_type
         else:
@@ -156,22 +168,6 @@ class User:
         self.ui.display_message(f"Failed to create server: {reason}", self.ui.COLOR_ERROR)
         self.command_results["create"] = False
         self.command_results["create_error"] = reason
-    
-    def ask_for_ip_version(self):
-        """Pregunta al usuario si desea utilizar IPv4 o IPv6."""
-        while True:
-            ip_version = self.ui.get_input("¿Desea utilizar IPv4 o IPv6? (4/6): ").strip()
-            if ip_version == "4":
-                self.logger.info("User selected IPv4")
-                self.use_ipv6 = False
-                return
-            elif ip_version == "6":
-                self.logger.info("User selected IPv6")
-                self.use_ipv6 = True
-                return
-            else:
-                self.ui.display_message("Opción inválida. Por favor, ingrese '4' para IPv4 o '6' para IPv6.")
-                self.logger.warning("Invalid IP version selected")
     
     def _process_remaining_buffer(self):
         """Process any remaining data in the communication buffer"""
@@ -221,48 +217,65 @@ class User:
     
     def connect_to_server(self):
         """Establece la conexión con el servidor principal."""
-        if self.test_mode:
-            self.ui.display_message(IM.GREETING)
-            self.logger.info("Test mode enabled, skipping server connection")
-            return True
-        
         try:
-            self.ask_for_ip_version()
-            if not self.create_socket():
-                return False
-                
-            self.logger.info(f"Attempting to connect to {self.server_host}:{self.server_port}")
-            self.sock.connect((self.server_host, self.server_port))
+            self.ui.display_message(f"Connecting to server at {self.server_host}:{self.server_port}")
+            self.logger.info(f"Connecting to server at {self.server_host}:{self.server_port}")
             
-            # Test the connection with a test message
-            self.communication.send_message(self.sock, UM.TEST)
+            # Primero verificar si el cliente soporta IPv6
+            local_ipv6 = NetworkManager.is_ipv6_available()
+            self.logger.info(f"Local IPv6 support: {local_ipv6}")
             
-            # Wait for a response to verify communication is working
-            success, data = self.communication.receive_message(self.sock)
-            if not success:
-                self.ui.display_message("Connection test failed, server did not respond.")
-                self.logger.error("Connection test failed")
-                return False
-                
-            # Process the response using the communication handler
-            self.communication.execute_command(data)
+            # Variable para controlar qué versión IP usar
+            use_ipv6 = False
+            server_ipv6 = False
             
-            # Check if the result was OK
-            if self.command_results.get("last_status") != "ok":
-                self.ui.display_message("Connection test failed, server response not recognized.")
-                self.logger.error("Connection test failed: invalid response")
-                return False
-                
-            self.logger.info("Connected to server")
+            # Si tenemos soporte local para IPv6, verificar si el servidor también lo soporta
+            if local_ipv6:
+                try:
+                    # Intentar una conexión temporal para verificar si el servidor soporta IPv6
+                    temp_sock = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
+                    temp_sock.settimeout(2)  # Timeout corto para verificación
+                    temp_sock.connect((self.server_host, self.server_port, 0, 0))  # Formato IPv6
+                    server_ipv6 = True
+                    temp_sock.close()
+                    self.logger.info("Server supports IPv6")
+                except Exception as e:
+                    server_ipv6 = False
+                    self.logger.info(f"Server does not support IPv6 or hostname not resolved: {e}")
+            
+            # Si ambos soportan IPv6, preguntar al usuario qué prefiere
+            if local_ipv6 and server_ipv6:
+                use_ipv6 = self.ask_for_ip_version()
+            
+            # Conectar usando la versión IP elegida o disponible
+            if use_ipv6:
+                # Conectar explícitamente con IPv6
+                self.sock = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
+                self.sock.connect((self.server_host, self.server_port, 0, 0))
+                self.using_ipv6 = True
+                self.logger.info("Connected using IPv6")
+            else:
+                # Usar IPv4
+                self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                self.sock.connect((self.server_host, self.server_port))
+                self.using_ipv6 = False
+                self.logger.info("Connected using IPv4")
+            
+            self.ui.display_message("Connected successfully" + (" using IPv6" if self.using_ipv6 else " using IPv4"))
             return True
-        except socket.timeout:
-            self.ui.display_message("Connection timed out.")
-            self.logger.error("Connection timed out")
-            return False
+                
         except Exception as e:
-            self.ui.display_message(f"Connection error: {e}")
-            self.logger.error(f"Connection error: {e}")
+            self.ui.display_message(f"Failed to connect: {e}")
+            self.logger.error(f"Failed to connect: {e}")
             return False
+    
+    def ask_for_ip_version(self):
+        """Pregunta al usuario qué versión de IP prefiere usar."""
+        self.logger.info("Asking user for IP version preference")
+        choice = self.ui.get_input("Both IPv4 and IPv6 are available. Enter '6' for IPv6 or '4' for IPv4: ")
+        use_ipv6 = (choice.strip() == '6')
+        self.logger.info(f"User selected {'IPv6' if use_ipv6 else 'IPv4'}")
+        return use_ipv6
     
     def login(self):
         """Realiza el proceso de login del jugador."""
@@ -403,16 +416,20 @@ class User:
         try:
             self.ui.display_message(f"Connecting to {server_name} ({game_type} mode)...")
             
+            # Obtener el servidor correcto (puede ser localhost u otro servidor)
+            server_host = self.command_results.get("server_host", self.server_host)
+            
             # Use PlayerFactory to create the appropriate player and interface
             player = create_player(
                 self.username, 
-                'localhost', 
+                server_host, 
                 int(server_port), 
-                game_type
+                game_type,
+                self.test_mode  # Pass debug mode
             )
             
             if player:
-                self.logger.info(f"Connected to game server: {server_name}:{server_port}")
+                self.logger.info(f"Connected to game server: {server_name} at {server_host}:{server_port}")
                 
                 # Hide the user User interface
                 self.ui.pause()
@@ -451,4 +468,20 @@ class User:
 # Ejecución del cliente
 if __name__ == "__main__":
     user = User(test_mode=False)
-    user.ui.start()
+    
+    try:
+        # Conectar al servidor dentro de la UI
+        # No intentar conectarse antes de inicializar la UI
+        user.ui.start()
+    except KeyboardInterrupt:
+        # Manejar cierre con Ctrl+C
+        print("Programa interrumpido por el usuario")
+    except Exception as e:
+        print(f"Error en la aplicación: {e}")
+    finally:
+        # Asegurarse de cerrar las conexiones
+        if hasattr(user, 'sock') and user.sock:
+            try:
+                user.sock.close()
+            except:
+                pass

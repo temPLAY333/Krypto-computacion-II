@@ -1,4 +1,5 @@
 import uuid
+import socket
 import asyncio
 import logging
 import threading
@@ -10,25 +11,30 @@ from common.social import LogMessages as Logs
 from common.social import UserMainMessages as UM
 from common.social import InterfaceMessages as IM
 from common.social import MainServerMessages as SM
+from common.network import NetworkManager
 from common.communication import Communication
 
 from puzzle.logic import KryptoLogic
 from puzzle.server_factory import ServerFactory
 
 class MainServer:
-    def __init__(self, host='localhost', port=5000, max_servers=5, debug=False):
-        self.host = host
+    def __init__(self, host='0.0.0.0', port=5000, debug=False):
+        """Initialize MainServer"""
+        self.host = host  # Usar 0.0.0.0 para escuchar en todas las interfaces
         self.port = port
-        self.max_servers = max_servers
-        self.debug_enabled = debug
+        self.debug = debug
+        self.max_servers = 5
         
         # Set up logging using the new centralized logger
         Logger.configure(debug)
-        
+
+        self.server_ip = self.get_server_ip()
+        logging.info(f"Server will use {self.server_ip} for external communications")
+    
         # Puzzles y servidores
         self.puzzle_queue = multiprocessing.Queue()
         self.message_queue = multiprocessing.Queue()
-        self.server_factory = ServerFactory(self.puzzle_queue, self.message_queue, debug)
+        self.server_factory = ServerFactory(self.server_ip, self.puzzle_queue, self.message_queue)
         
         # Create loggers using the centralized logger
         self.server_logger = Logger.get("ServerCommunication", debug)
@@ -52,25 +58,25 @@ class MainServer:
         self.pending_servers: Dict[int, Any] = {}   # Dictionary to track servers being created
         self.failed_servers = set()  # Set of PIDs that failed to start
 
-        self.main_logger.info(f"MainServer initialized with host={host}, port={port}, max_servers={max_servers}, debug={debug}")
+        self.main_logger.info(f"MainServer initialized with host={host}, port={port}, debug={debug}")
     
     def enable_debug(self):
         """Enable debug mode"""
-        if not self.debug_enabled:
-            self.debug_enabled = True
+        if not self.debug:
+            self.debug = True
             Logger.configure(True)
             self.main_logger.info("Debug mode enabled")
     
     def disable_debug(self):
         """Disable debug mode"""
-        if self.debug_enabled:
-            self.debug_enabled = False
+        if self.debug:
+            self.debug = False
             Logger.configure(False)
             self.main_logger.info("Debug mode disabled")
     
     def toggle_debug(self):
         """Toggle debug mode on/off"""
-        if self.debug_enabled:
+        if self.debug:
             self.disable_debug()
         else:
             self.enable_debug()
@@ -94,35 +100,58 @@ class MainServer:
             SM.OK: self.handle_server_ok,
             SM.ERROR: self.handle_server_error,
             SM.KILL_SERVER: self.handle_server_kill,
-            SM.PLAYER_EXIT: self.handle_player_exit
+            SM.PLAYER_JOIN: self.handle_player_join,
+            SM.PLAYER_EXIT: self.handle_player_exit,
         }
         self.server_communication.define_all_commands(handlers)
         logging.info("Server command handlers registered")
 
     async def start_main_server(self):
         """Inicia el servidor principal para manejar jugadores y servidores clásicos."""
-        await self.initialize_puzzles()
-
-
+        # Usar '0.0.0.0' para IPv4 o '::' para IPv6 (escuchar en todas las interfaces)
+        if self.host == 'localhost':
+            # Reemplazar localhost con la interfaz apropiada
+            self.host = '::' if NetworkManager.is_ipv6_available() else '0.0.0.0'
+        
+        self.main_logger.info(f"Starting main server on {self.host}:{self.port}")
+        
+        # Crear el socket manualmente para evitar problemas de resolución
         try:
-            # Try to use a single server that can handle both IPv4 and IPv6
+            # Intentar con IPv6 primero si está disponible
+            if NetworkManager.is_ipv6_available() and self.host in ['::']:
+                sock = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                # Permitir conexiones IPv4 también
+                sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+                sock.bind((self.host, self.port))
+                self.is_ipv6 = True
+                self.main_logger.info(f"Using IPv6 socket on {self.host}:{self.port}")
+            else:
+                # Usar IPv4
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                sock.bind((self.host, self.port))
+                self.is_ipv6 = False
+                self.main_logger.info(f"Using IPv4 socket on {self.host}:{self.port}")
+            
+            sock.listen(100)  # Permitir múltiples conexiones pendientes
+            
+            # Convertir a asyncio server
             server = await asyncio.start_server(
-                self.handle_new_player, 
-                self.host, 
-                self.port,
-                reuse_address=True
+                self.handle_new_player,
+                sock=sock
             )
             
-            logging.info(f"Servidor principal definido en {self.host}:{self.port}")
-            addr = server.sockets[0].getsockname()
-            logging.info(f"Escuchando en: {addr}")
+            # Inicializar puzzles y listener
+            await self.initialize_puzzles()
+            self.start_message_listener()
+            
+            # Mantener el servidor corriendo
+            await self.run_server(server, "Main Server")
+            
         except Exception as e:
-            logging.error(f"Error al iniciar el servidor: {e}")
-            return
-
-        await asyncio.gather(
-            self.run_server(server, "Main")
-        )
+            self.main_logger.error(f"Error starting server: {e}")
+            raise  # Re-lanzar para permitir un manejo adecuado en el código principal
 
     async def initialize_puzzles(self):
         """Inicializar la cola con puzzles iniciales."""
@@ -132,6 +161,20 @@ class MainServer:
             await loop.run_in_executor(None, 
                                     lambda: self.puzzle_queue.put(KryptoLogic.generar_puzzle()))
         logging.info("Puzzles inicializados")
+
+    def get_server_ip(self):
+        """Obtener IP real del servidor para comunicaciones externas"""
+        try:
+            # No usar localhost/127.0.0.1 - buscar una IP accesible desde la red
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            # Conectar a un DNS público para determinar la interfaz utilizada
+            s.connect(("8.8.8.8", 80))
+            ip = s.getsockname()[0]
+            s.close()
+            return ip
+        except Exception as e:
+            logging.warning(f"Couldn't determine server IP: {e}. Using localhost.")
+            return "localhost"
 
     """------------------------------------------- Manejo de Usuarios ------------------------------------------- """
 
@@ -293,15 +336,12 @@ class MainServer:
             Logger.log_outgoing(logging, addr, response)
             return
         
-        # Server exists and has capacity, update player count
-        self.servers[server_id]["player_count"] = current_players + 1
-        
         # Send server details to the player
         name = self.servers[server_id]["name"]
         port = self.servers[server_id]["port"]
         mode = self.servers[server_id]["mode"]
         
-        response = f"{UM.JOIN_SUCCESS}|{name}|{port}|{mode}"
+        response = f"{UM.JOIN_SUCCESS}|{server_details['name']}|{self.server_ip}|{server_details['port']}|{server_details['mode']}"
         await self.users_communication.send_message_async(writer, response)
         Logger.log_outgoing(logging, addr, response)
         logging.info(f"Player from {addr} joined server {name} ({current_players+1}/{max_players})")
@@ -408,7 +448,7 @@ class MainServer:
                     Logger.log_incoming(message_logger, "GameServer", message)
                     
                     # Debug print only if debug is enabled
-                    if self.debug_enabled:
+                    if self.debug:
                         print(f"Debug - Received message from GameServer: {message}")
                     
                     # Run the coroutine directly in a new event loop inside this thread
@@ -443,7 +483,7 @@ class MainServer:
             dummy_writer = None
             
             # Debug output only if debug is enabled
-            if self.debug_enabled:
+            if self.debug:
                 print(f"Debug - Parsing message: '{message}'")
                 parts = message.split('|')
                 print(f"Debug - Command: '{parts[0]}', Args: {parts[1:] if len(parts) > 1 else []}")
@@ -536,6 +576,29 @@ class MainServer:
         except Exception as e:
             self.main_logger.error(f"Error terminating process with PID {pid}: {e}")
 
+    async def handle_player_join(self, writer, pid, *args):
+        """Handle player join notification from game server"""
+        try:
+            pid = int(pid)
+            
+            # Encontrar el servidor por PID
+            server_id_to_update = None
+            for server_id, details in self.servers.items():
+                if details.get("pid") == pid:
+                    server_id_to_update = server_id
+                    break
+                    
+            if server_id_to_update:
+                # Incrementar el contador de jugadores
+                current_count = self.servers[server_id_to_update].get("player_count", 0)
+                new_count = min(self.servers[server_id_to_update].get("max_players", 8), current_count + 1)
+                self.servers[server_id_to_update]["player_count"] = new_count
+                self.main_logger.debug(f"Player joined server {server_id_to_update}. New player count: {new_count}")
+            else:
+                self.main_logger.warning(f"Received player join for unknown server PID {pid}")
+        except Exception as e:
+            self.main_logger.error(f"Error handling player join: {e}")
+    
     async def handle_player_exit(self, writer, pid):
         """Handle player exit notification from game server"""
         try:
@@ -579,14 +642,12 @@ if __name__ == "__main__":
     
     parser = argparse.ArgumentParser(description="Krypto Main Server")
     parser.add_argument("--debug", action="store_true", help="Enable debug logging")
-    parser.add_argument("--host", default="localhost", help="Server host")
+    parser.add_argument("--host", default="0.0.0.0", help="Server host (use '0.0.0.0' for IPv4 or '::' for IPv6)")
     parser.add_argument("--port", type=int, default=5000, help="Server port")
-    parser.add_argument("--max-servers", type=int, default=5, help="Maximum number of game servers")
     
     args = parser.parse_args()
     
-    main_server = MainServer(host=args.host, port=args.port, 
-                            max_servers=args.max_servers, debug=args.debug)
+    main_server = MainServer(host=args.host, port=args.port, debug=args.debug)
     try:
         asyncio.run(main_server.start_main_server())
     except KeyboardInterrupt:

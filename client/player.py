@@ -1,11 +1,14 @@
 import time
 import socket
 import threading
-from client.player_interface import PlayerInterface
+
+from common.logger import Logger
 from common.social import PlayerServerMessages as PSM
 from common.social import ServerClientMessages as SCM
+from common.network import NetworkManager
 from common.communication import Communication
-from common.logger import Logger
+
+from client.player_interface import PlayerInterface
 
 class Player:
     """Handles game communication with GameServer"""
@@ -27,6 +30,9 @@ class Player:
         self.connected = False
         self.current_puzzle = None
         self.interface = None
+    
+        # Determinar si el host es IPv6
+        self.use_ipv6 = ':' in server_host and server_host != 'localhost'
         
         # Set up logging
         self.logger = Logger.get(f"Player-{username}", debug)
@@ -40,7 +46,6 @@ class Player:
     def register_message_handlers(self):
         """Register handlers for GameServer messages"""
         handlers = {
-            PSM.GREETING: self.handle_welcome,
             SCM.PUZZLE: self.handle_puzzle,
             SCM.NEW_PUZZLE: self.handle_new_puzzle,
             SCM.SOLUTION_CORRECT: self.handle_solution_correct,
@@ -62,27 +67,25 @@ class Player:
         self.logger.debug(f"Interface set for player {self.username}")
         
     def connect(self):
-        """Connect to GameServer
-        
-        Returns:
-            bool: True if connection successful
-        """
-        if not self.interface:
-            self.logger.error("Cannot connect: No interface set")
-            return False
-            
+        """Connect to game server"""
         try:
-            self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            self.socket.connect((self.server_host, self.server_port))
+            self.logger.info(f"Connecting to game server at {self.server_host}:{self.server_port}")
+            
+            # Usar NetworkManager para crear el socket
+            self.socket, self.using_ipv6 = NetworkManager.create_client_socket(
+                self.server_host, self.server_port
+            )
+            
+            # Send username to identify
+            self.communication.send_message(self.socket, f"{PSM.GREETING}|{self.username}")
+            
+            self.start_listener() 
             self.connected = True
-            self.logger.info(f"Connected to GameServer at {self.server_host}:{self.server_port}")
-            
-            # Start listener
-            self.start_listener()
-            
+            self.logger.info(f"Connected to game server" + (" using IPv6" if self.using_ipv6 else " using IPv4"))
             return True
+            
         except Exception as e:
-            self.logger.error(f"Connection failed: {e}")
+            self.logger.error(f"Failed to connect to game server: {e}")
             return False
     
     def start_listener(self):
@@ -216,7 +219,10 @@ class Player:
             
         if not self.connected and not self.connect():
             return False
-            
+        
+        if self.connected and not self.current_puzzle:
+            time.sleep(0.3)
+
         self.interface.run()
         return True
         

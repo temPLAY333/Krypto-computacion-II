@@ -97,6 +97,7 @@ class MainServerMessages:
     ERROR = "error"
     KILL_SERVER = "kill"
     PLAYER_EXIT = "PLAYER_EXIT"
+    PLAYER_JOIN = "PLAYER_JOIN"
 
 class ServerClientMessages:
     """Messages between game servers and clients"""

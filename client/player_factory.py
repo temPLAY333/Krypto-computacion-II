@@ -38,7 +38,7 @@ def create_player(username, server_address, server_port, game_type="classic", de
         player.set_interface(interface)
         interface.set_player(player)
         
-        logger.info(f"Created {game_type} player for {username}")
+        logger.info(f"Created {game_type} player for {username} connecting to {server_address}:{server_port}")
         return player
     
     except Exception as e:

@@ -1,7 +1,8 @@
+import os
 import asyncio
 import logging
-import os
-import time
+
+from common.logger import Logger
 from common.social import ServerClientMessages as SCM
 from common.social import PlayerServerMessages as PSM
 from common.social import MainServerMessages as SM
@@ -15,8 +16,7 @@ class ClassicServer(AbstractGameServer):
     def __init__(self, name, port, puzzle_queue, message_queue, max_players=8, debug=False):
         super().__init__(name, port, puzzle_queue, message_queue, debug)
         self.mode = "classic"
-        self.logger = logging.getLogger(f"ClassicServer-{name}")
-        self.logger.setLevel(logging.DEBUG if debug else logging.INFO)
+        self.logger = Logger.get(f"ClassicServer-{name}", debug)
         
          # Estructura unificada de tracking de jugadores
         self.players = {}  # {client_id: {"username": name, "state": None|"correct"|"surrendered"}}
@@ -36,7 +36,8 @@ class ClassicServer(AbstractGameServer):
             SCM.GET_PUZZLE: self.handle_get_puzzle,
             SCM.SUBMIT_SOLUTION: self.handle_submit_solution,
             PSM.PLAYER_SURRENDER: self.handle_player_surrender,
-            PSM.PLAYER_EXIT: self.handle_player_exit
+            PSM.PLAYER_EXIT: self.handle_player_exit,
+            PSM.GREETING: self.handle_greeting
         }
         self.comm.define_all_commands(handlers)
     
@@ -123,7 +124,6 @@ class ClassicServer(AbstractGameServer):
         await asyncio.sleep(0.5)
         if not await self.check_puzzle_completion_status():
             await self.broadcast_game_stats()
-        
 
     async def handle_player_exit(self, writer, *args):
         """Handle PLAYER_EXIT command"""
@@ -158,6 +158,23 @@ class ClassicServer(AbstractGameServer):
             else:
                 self.logger.info("All players have disconnected")
                 self.message_queue.put(f"{SM.KILL_SERVER}|{os.getpid()}")
+    
+    async def handle_greeting(self, writer, *args):
+        """Handle greeting (welcome) message from client"""
+        client_id = self.get_client_id_from_writer(writer)
+        
+        # Si se proporcionó un nombre de usuario en el mensaje
+        username = args[0] if args else client_id
+        
+        # Actualizar el nombre de usuario en la estructura de jugadores
+        if client_id not in self.players:
+            self.players[client_id] = {"username": username, "state": None}
+        else:
+            self.players[client_id]["username"] = username
+            
+        self.logger.info(f"Player {username} identified")
+
+        await self.comm.send_message_async(writer, f"{SCM.PUZZLE}|{self.current_puzzle}\n")
     
     def get_client_id_from_writer(self, writer):
         """Get client ID from writer object"""
@@ -203,69 +220,7 @@ class ClassicServer(AbstractGameServer):
                 
                 return True  # Puzzle actualizado
         
-        return False  # No necesita nuevo puzzle
-            
-    async def handle_client_connection(self, reader, writer):
-        """Handle a client connection"""
-        addr = writer.get_extra_info('peername')
-        client_id = f"{addr[0]}:{addr[1]}"
-        
-        self.logger.info(f"New client connected: {client_id}")
-
-        # Cancelar el temporizador de inactividad si es el primer cliente
-        if self.idle_timer_active and len(self.clients) == 0:
-            self.logger.info("First player joined. Canceling idle timer.")
-            self.idle_timer_active = False
-        
-        # Add client to tracking
-        self.clients[client_id] = {
-            "reader": reader,
-            "writer": writer,
-            "last_activity": asyncio.get_event_loop().time()
-        }
-        
-        try:
-            # Send welcome message
-            await self.comm.send_message_async(writer, f"{PSM.GREETING}|{self.name}\n")
-            
-            # Send current puzzle immediately
-            if self.current_puzzle:
-                await self.comm.send_message_async(writer, f"{SCM.PUZZLE}|{self.current_puzzle}\n")
-            
-            # Broadcast updated game stats after new client connects
-            await self.broadcast_game_stats()
-            
-            # Handle client messages
-            while client_id in self.clients and not self.clients[client_id].get("disconnected", False):
-                try:
-                    data = await reader.read(1024)
-                    if not data:
-                        # Client disconnected
-                        break
-                        
-                    message = data.decode()
-                    self.logger.debug(f"Received from {client_id}: {message}")
-                    
-                    # Process message using Communication
-                    await self.comm.handle_async_command(message, writer)
-                except ConnectionError:
-                    # Explicit handling for connection errors
-                    self.logger.debug(f"Connection lost with {client_id}")
-                
-        except Exception as e:
-            self.logger.error(f"Error handling client {client_id}: {e}")
-        finally:
-            # Clean up
-            writer.close()
-            try:
-                await writer.wait_closed()
-            except:
-                pass
-                
-            if client_id in self.clients:
-                del self.clients[client_id]
-                # Broadcast updated stats after client disconnects
-                await self.broadcast_game_stats()
+        return False  # No necesita nuevo puzzle    
     
     async def broadcast_game_stats(self):
         """Broadcast current game statistics to all connected clients"""
@@ -294,21 +249,40 @@ class ClassicServer(AbstractGameServer):
     async def broadcast_message(self, message):
         """Send a message to all connected clients"""
         try:
-            self.logger.debug(f"Broadcasting: {message}")
+            # Solo enviar mensaje a clientes que no están marcados como desconectados
+            active_clients = {cid: data for cid, data in self.clients.items() 
+                             if not data.get("disconnected", False)}
             
-            for client_id, client_data in list(self.clients.items()):
-                writer = client_data["writer"]
-                try:
-                    writer.write(message.encode())
-                    await writer.drain()
-                except Exception as e:
-                    self.logger.error(f"Failed to send to client {client_id}: {e}")
-                    # Mark client for removal
-                    del self.clients[client_id]
-                    
-            self.logger.debug(f"Broadcast complete to {len(self.clients)} clients")
+            if not active_clients:
+                return
+                
+            self.logger.debug(f"Broadcasting to {len(active_clients)} clients: {message[:50]}...")
+            
+            # Crear tareas de envío para todos los clientes y esperar que todas terminen
+            send_tasks = []
+            for client_id, client_data in active_clients.items():
+                writer = client_data.get("writer")
+                if writer and not writer.is_closing():
+                    # Crear tarea pero no esperar a que termine inmediatamente
+                    task = asyncio.create_task(self._send_to_client(client_id, writer, message))
+                    send_tasks.append(task)
+            
+            # Esperar a que todas las tareas terminen con timeout
+            if send_tasks:
+                await asyncio.wait(send_tasks, timeout=2.0)
+                
         except Exception as e:
-            self.logger.error(f"Broadcast error: {e}")
+            self.logger.error(f"Error broadcasting message: {e}")
+    
+    async def _send_to_client(self, client_id, writer, message):
+        """Helper method to send a message to a specific client with error handling"""
+        try:
+            await self.comm.send_message_async(writer, message)
+        except Exception as e:
+            self.logger.error(f"Failed to send to client {client_id}: {e}")
+            # Marcar como desconectado si hay error
+            if client_id in self.clients:
+                self.clients[client_id]["disconnected"] = True
             
     def validate_solution(self, solution:str):
         """Validate a solution against the current puzzle

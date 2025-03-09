@@ -193,27 +193,47 @@ class UserInterface:
         self.setup_colors()
         self.setup_windows()
         
-        # Guardar tamaño inicial para detectar redimensionamientos en Windows
-        self.last_terminal_size = self.stdscr.getmaxyx()
+        # Evitar mostrar mensaje de bienvenida y reintento si ya estamos conectados
+        if not self.user.sock:
+            # Mostrar bienvenida
+            self.display_welcome()
+    
+            # Intentar conectar
+            max_retries = 3  # Limitar reintentos para evitar bucle infinito
+            retry_count = 0
+            
+            while not self.user.sock and retry_count < max_retries:
+                retry_count += 1
+                if not self.user.connect_to_server():
+                    if retry_count < max_retries:
+                        self.display_message(f"Failed to connect to server. Retrying... ({retry_count}/{max_retries})", 
+                                          self.COLOR_WARNING, wait_key=False)
+                    else:
+                        self.display_message("Could not connect after multiple attempts. Exiting.", 
+                                          self.COLOR_ERROR)
+                        self.active = False
+                        return
+            
+            # No mostrar el login si no pudimos conectar
+            if not self.user.sock:
+                return
         
-        # Intentar registrar manejador para SIGWINCH solo en sistemas compatibles
-        try:
-            import platform
-            if platform.system() != "Windows":
-                signal.signal(signal.SIGWINCH, self.handle_resize)
-            else:
-                self.logger.info("Resize handling not supported on Windows")
-        except Exception as e:
-            self.logger.warning(f"Could not register resize handler: {e}")
-        
-        # Mostrar bienvenida
-        self.display_welcome()
-
-        while not self.user.connect_to_server():
-            self.display_message("Failed to connect to server. Retrying...", self.COLOR_WARNING, wait_key=False)
-  
-        while not self.user.login():
-            self.display_message("Failed to login. Retrying...", self.COLOR_WARNING, wait_key=False)
+        # Continuar con el login solo si estamos conectados
+        if not self.user.username:
+            retry_count = 0
+            max_login_retries = 3
+            
+            while not self.user.username and retry_count < max_login_retries:
+                retry_count += 1
+                if not self.user.login():
+                    if retry_count < max_login_retries:
+                        self.display_message(f"Failed to login. Retrying... ({retry_count}/{max_login_retries})", 
+                                          self.COLOR_WARNING, wait_key=False)
+                    else:
+                        self.display_message("Could not login after multiple attempts. Exiting.", 
+                                          self.COLOR_ERROR)
+                        self.active = False
+                        return
         
         # Main menu loop
         while self.active:    

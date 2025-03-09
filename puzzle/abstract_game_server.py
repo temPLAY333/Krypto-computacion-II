@@ -1,11 +1,13 @@
+import os
 import abc
+import socket
 import asyncio
 import logging
-import os
 from queue import Empty, Queue
-import time
 
 from common.social import MainServerMessages as SM
+from common.social import ServerClientMessages as SCM
+from common.network import NetworkManager
 
 class AbstractGameServer(abc.ABC):
     """Abstract base class for different game server types"""
@@ -27,50 +29,50 @@ class AbstractGameServer(abc.ABC):
         self.idle_timer = None
         self.idle_timer_active = False
         
-    def start(self):
+    async def start(self, host='0.0.0.0'):
         """Start the game server"""
+        # Detectar si es dirección IPv4 explícita (como 192.168.0.115)
+        is_ipv4_address = '.' in host and all(part.isdigit() and int(part) <= 255 
+                                              for part in host.split('.') if part)
+        
         try:
-            # Initialize puzzles
+            # Usar socket IPv4 si la dirección es IPv4
+            if is_ipv4_address:
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                self.is_ipv6 = False
+                self.logger.info(f"Using IPv4 socket for IPv4 address {host}")
+            else:
+                # Intentar con IPv6 si está disponible
+                if NetworkManager.is_ipv6_available():
+                    sock = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
+                    self.is_ipv6 = True
+                    self.logger.info(f"Using IPv6 socket for address {host}")
+                else:
+                    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    self.is_ipv6 = False
+                    self.logger.info(f"Using IPv4 socket (IPv6 not available) for address {host}")
+            
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            sock.bind((host, self.port))
+            sock.listen(10)
+            
+            # Convertir a asyncio server
+            self.server = await asyncio.start_server(
+                self.handle_client_connection,
+                sock=sock
+            )
+            
+            # Inicializar puzzles
             self.initialize_puzzles()
             
-            # Send OK message to main server after initialization
-            self.message_queue.put(f"{SM.OK}|{os.getpid()}")
-            self.logger.info(f"Sent OK message with PID {os.getpid()} to main server")
+            # Mantener el servidor corriendo
+            async with self.server:
+                await self.server.serve_forever()
             
-            # Run the server
-            asyncio.run(self.run_server())
         except Exception as e:
-            self.logger.error(f"Fatal error in game server: {e}")
-            self.message_queue.put(f"{SM.ERROR}|{os.getpid()}|{str(e)}")
-            import traceback
-            self.logger.error(traceback.format_exc())
-    
-    async def start_idle_timer(self):
-        """Start a timer that will shut down the server if no players join within 60 seconds"""
-        try:
-            self.logger.info("Starting 60-second idle timer for player connection")
-            
-            # Esperar 60 segundos
-            await asyncio.sleep(60)
-            
-            # Solo continuar si el temporizador sigue activo
-            if self.idle_timer_active:
-                # Verificar si hay jugadores activos
-                active_clients = {cid: data for cid, data in self.clients.items() 
-                                if not data.get("disconnected", False)}
-                
-                if not active_clients:
-                    self.logger.info("No players joined within 60 seconds. Auto-shutting down server.")
-                    self.message_queue.put(f"{SM.KILL_SERVER}|{os.getpid()}")
-                else:
-                    self.logger.info(f"Players have joined ({len(active_clients)}). Server will continue running.")
-                    self.idle_timer_active = False
-                    
-        except asyncio.CancelledError:
-            self.logger.debug("Idle timer was cancelled because players joined")
-        except Exception as e:
-            self.logger.error(f"Error in idle timer: {e}")
-    
+            self.logger.error(f"Error starting server: {e}")
+            raise
+
     def enable_debug(self):
         """Enable debug mode"""
         if not self.debug_enabled:
@@ -99,37 +101,96 @@ class AbstractGameServer(abc.ABC):
             self.logger.error(f"Error initializing puzzles: {e}")
             raise
             
-    async def run_server(self):
-        """Run the game server - async entry point"""
-        try:
-            server = await asyncio.start_server(
-                self.handle_client_connection,
-                'localhost',
-                self.port
-            )
-            
-            self.logger.info(f"Game server running on port {self.port}")
-
-            self.idle_timer_active = True
-            self.idle_timer = asyncio.create_task(self.start_idle_timer())
-        
-            
-            async with server:
-                await server.serve_forever()
-                
-        except Exception as e:
-            self.logger.error(f"Error running game server: {e}")
-            self.message_queue.put(f"{SM.ERROR}|{os.getpid()}|{str(e)}")
-            
     @abc.abstractmethod
     def get_initial_puzzles(self):
         """Get initial puzzles for the game - must be implemented by subclasses"""
         pass
     
-    @abc.abstractmethod
     async def handle_client_connection(self, reader, writer):
-        """Handle a client connection - can be overridden by subclasses"""
-        pass
+        """Handle a client connection"""
+        addr = writer.get_extra_info('peername')
+        client_id = f"{addr[0]}:{addr[1]}"
+        
+        self.logger.info(f"New client connected: {client_id}")
+        
+        # Desactivar temporizador de inactividad si es el primer cliente
+        if self.idle_timer_active and len(self.clients) == 0:
+            self.logger.info("First player joined. Canceling idle timer.")
+            self.idle_timer_active = False
+        
+        # Añadir cliente a la estructura de seguimiento
+        self.clients[client_id] = {
+            "reader": reader,
+            "writer": writer,
+            "last_activity": asyncio.get_event_loop().time(),
+            "disconnected": False
+        }
+        
+        # Inicializar player con estado vacío
+        if client_id not in self.players:
+            self.players[client_id] = {"username": client_id, "state": None}
+        
+        # Enviar el puzzle actual al nuevo cliente
+        if self.current_puzzle:
+            await asyncio.sleep(0.5)
+            await self.comm.send_message_async(writer, f"{SCM.NEW_PUZZLE}|{self.current_puzzle}\n")
+        
+        # CORREGIDO: Notificar al servidor principal con manejo de errores
+        try:
+            if hasattr(self, 'message_queue') and self.message_queue:
+                try:
+                    self.message_queue.put_nowait(f"{SM.PLAYER_JOIN}|{os.getpid()}")
+                except Exception as e:
+                    self.logger.warning(f"Could not notify main server of player join: {e}")
+        except Exception as e:
+            self.logger.error(f"Error accessing message queue: {e}")
+        
+        # Broadcast actualizado de estadísticas
+        await self.broadcast_game_stats()
+
+        # Manejar mensajes del jugador
+        await self.handle_player_message(reader, writer, client_id)
+    
+    async def handle_player_message(self, reader, writer, client_id):
+        """Handle a message from a player"""
+        try:
+            while not writer.is_closing():
+                try:
+                    data = await asyncio.wait_for(reader.readline(), timeout=1.0)
+                    if not data:  # Connection closed
+                        break
+                        
+                    message = data.decode('utf-8').strip()
+                    if message:
+                        self.logger.debug(f"Received from {client_id}: {message}")
+                        await self.comm.handle_async_command(message, writer)
+                        
+                    # Actualizar timestamp de última actividad
+                    self.clients[client_id]["last_activity"] = asyncio.get_event_loop().time()
+                        
+                except asyncio.TimeoutError:
+                    # Esto es normal, solo verificar si el cliente sigue conectado
+                    continue
+                except Exception as e:
+                    self.logger.error(f"Error processing client message: {e}")
+                    break
+        except Exception as e:
+            self.logger.error(f"Error in client connection handler: {e}")
+        finally:
+            # Cleanup when client disconnects
+            if client_id in self.clients:
+                self.clients[client_id]["disconnected"] = True
+                
+            self.logger.info(f"Client disconnected: {client_id}")
+            try:
+                writer.close()
+                await writer.wait_closed()
+            except Exception as e:
+                self.logger.error(f"Error closing client connection: {e}")
+                
+            # Process player exit
+            await self.handle_player_exit(writer)
+        
         
     @abc.abstractmethod
     async def broadcast_message(self, message):
@@ -153,3 +214,96 @@ class AbstractGameServer(abc.ABC):
         except Exception as e:
             self.logger.error(f"Error getting next puzzle: {e}")
             return None
+    
+    async def start_idle_timer(self):
+        """Start a timer that will shut down the server if no players join within 60 seconds"""
+        try:
+            self.logger.info("Starting 60-second idle timer for player connection")
+            
+            # Esperar 60 segundos
+            await asyncio.sleep(60)
+            
+            # Solo continuar si el temporizador sigue activo
+            if self.idle_timer_active:
+                # Verificar si hay jugadores activos
+                active_clients = {cid: data for cid, data in self.clients.items() 
+                                if not data.get("disconnected", False)}
+                
+                if not active_clients:
+                    self.logger.info("No players joined within 60 seconds. Auto-shutting down server.")
+                    self.message_queue.put(f"{SM.KILL_SERVER}|{os.getpid()}")
+                else:
+                    self.logger.info(f"Players have joined ({len(active_clients)}). Server will continue running.")
+                    self.idle_timer_active = False
+                    
+                    # Iniciar verificación periódica de clientes
+                    asyncio.create_task(self.check_clients_periodically())
+                    
+        except asyncio.CancelledError:
+            self.logger.debug("Idle timer was cancelled")
+        except Exception as e:
+            self.logger.error(f"Error in idle timer: {e}")
+            
+    async def check_clients_periodically(self):
+        """Verificar periódicamente el estado de los clientes"""
+        try:
+            while True:
+                await asyncio.sleep(30)  # Verificar cada 30 segundos
+                
+                # Verificar clientes inactivos
+                now = asyncio.get_event_loop().time()
+                inactive_timeout = 120  # 2 minutos sin actividad
+                
+                for client_id, client_data in list(self.clients.items()):
+                    # Si el cliente ya está marcado como desconectado, ignorarlo
+                    if client_data.get("disconnected", False):
+                        continue
+                        
+                    # Verificar si el cliente ha estado inactivo demasiado tiempo
+                    last_activity = client_data.get("last_activity", 0)
+                    if now - last_activity > inactive_timeout:
+                        self.logger.warning(f"Client {client_id} inactive for too long, marking as disconnected")
+                        self.clients[client_id]["disconnected"] = True
+                        
+                        writer = client_data.get("writer")
+                        if writer and not writer.is_closing():
+                            try:
+                                writer.close()
+                            except:
+                                pass
+                
+                # Verificar si todos los clientes están desconectados
+                active_clients = {cid: data for cid, data in self.clients.items() 
+                                 if not data.get("disconnected", False)}
+                                 
+                if not active_clients and len(self.clients) > 0:
+                    self.logger.info("All clients disconnected. Auto-shutting down server.")
+                    self.message_queue.put(f"{SM.KILL_SERVER}|{os.getpid()}")
+                    break
+                    
+        except Exception as e:
+            self.logger.error(f"Error checking clients: {e}")
+
+    def check_message_queue(self):
+        """Verificar si la cola de mensajes sigue activa"""
+        try:
+            # Prueba de verificación simple
+            self.message_queue.put_nowait(f"{SM.HEARTBEAT}|{os.getpid()}")
+            return True
+        except Exception as e:
+            self.logger.warning(f"Message queue appears to be unavailable: {e}")
+            return False
+    
+    def safe_queue_put(self, message):
+        """Poner un mensaje en la cola de forma segura"""
+        try:
+            if hasattr(self, 'message_queue') and self.message_queue:
+                try:
+                    self.message_queue.put_nowait(message)
+                    return True
+                except:
+                    # Silenciosamente fallar si la cola está llena o cerrada
+                    return False
+        except:
+            # Ignorar cualquier error de acceso a la cola
+            return False
