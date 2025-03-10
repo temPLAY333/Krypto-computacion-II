@@ -1,4 +1,5 @@
 import os
+import re
 import asyncio
 
 from common.social import ServerClientMessages as SCM
@@ -292,7 +293,7 @@ class ClassicServer(AbstractGameServer):
                 return False
             
             # Extract numbers and operations from the solution
-            numbers = [int(s) for s in solution if s.isdigit()]
+            numbers = [int(s) for s in re.findall(r'\d+', solution)]
             operations = [s for s in solution if s in '+-*.xX/:%']
             
             # Check if the solution uses exactly 4 numbers and 3 operations

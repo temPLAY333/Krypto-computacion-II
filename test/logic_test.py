@@ -84,6 +84,8 @@ class TestLogic(unittest.TestCase):
         ("1+2*3-4", 3, ["1","+","2","*","3","-","4"]),
         ("6/2+3*2", 9, ["6","/","2","+","3","*","2"]),
         ("10-2/2+3", 7, ["10","-","2","/","2","+","3"]),
+        ("7-5-1+10", 11, ["7","-","5","-","1","+","10"]),
+        ("5-7-1+10", 11, ["5","-","7","-","1","+","10"]),
     ])
     @patch('puzzle.logic.KryptoLogic.convertir')
     def test_11_verify_solution_true(self, string, answer, expected, mock_convertir):

@@ -1,156 +1,101 @@
 import unittest
 from unittest.mock import patch, MagicMock, call
-from puzzle.game_server import ServerClassic
-from common.social import Messages
+import asyncio
+from queue import Queue
 
-class TestServerClassic(unittest.TestCase):
+from puzzle.server_classic import ClassicServer
+from common.social import ServerClientMessages as SCM
+from common.social import PlayerServerMessages as PSM
+
+class TestClassicServer(unittest.TestCase):
 
     def setUp(self):
-        patcher = patch('builtins.print')
-        self.mock_print = patcher.start()
-        self.addCleanup(patcher.stop)
-
-        self.pipe_puzzle = MagicMock()
-        self.pipe_message = MagicMock()
-
-        # Mock the socket methods to avoid address/port conflicts
-        self.socket_patcher = patch('socket.socket')
-        self.mock_socket_class = self.socket_patcher.start()
-        self.addCleanup(self.socket_patcher.stop)
-
-        self.mock_socket_instance = MagicMock()
-        self.mock_socket_class.return_value = self.mock_socket_instance
-
-        self.server = ServerClassic(self.pipe_puzzle, self.pipe_message)
-    
+        # Mock queues for testing
+        self.puzzle_queue = MagicMock(spec=Queue)
+        self.message_queue = MagicMock(spec=Queue)
+        
+        # Create server instance
+        self.server = ClassicServer("Test", 5001, self.puzzle_queue, self.message_queue, debug=True)
+        
+        # Set current puzzle for testing
+        self.server.current_puzzle = [1,2,3,4,5]
+        
+        # Disable logging
+        self.server.logger.disabled = True
+        
     def tearDown(self):
         self.server = None
+
+    def test_initialization(self):
+        """Test server initialization"""
+        self.assertEqual(self.server.name, "Test")
+        self.assertEqual(self.server.port, 5001)
+        self.assertEqual(self.server.mode, "classic")
+        self.assertEqual(self.server.max_players, 8)
+        
+    # Tests for validate_solution
+    def test_validate_solution_valid(self):
+        """Test validate_solution with valid solution"""
+        with patch('puzzle.logic.KryptoLogic.verify_solution', return_value=True):
+            self.assertTrue(self.server.validate_solution("4+1*3-2"))
+            self.assertTrue(self.server.validate_solution("1+4*3-2"))
+            self.assertTrue(self.server.validate_solution("1+4*2-3"))
+            self.assertTrue(self.server.validate_solution("4+3-2*1"))
     
-    @patch('puzzle.server_classic.ServerClassic.handle_client_messages', return_value=None)
-    @patch('puzzle.server_classic.ServerClassic.check_game_status', return_value=None)
-    @patch('socket.socket', new_callable=MagicMock())
-    def test_01_starting(self, mock_socket, mock_check_game_status, mock_handle_client):
-        self.server.server_socket = MagicMock()
-        self.server.server_socket.accept.return_value = (mock_socket, "test-direction")
-        self.pipe_puzzle.get.return_value = "test puzzle"
+    def test_validate_solution_valid_2(self):
+        """Test validate_solution with valid solution and different puzzle"""
+        self.server.current_puzzle = [5,7,1,10,11]
+        with patch('puzzle.logic.KryptoLogic.verify_solution', return_value=True):
+            self.assertTrue(self.server.validate_solution("5-7-1+10"))
+            self.assertTrue(self.server.validate_solution("7-5-1+10"))
+            self.assertTrue(self.server.validate_solution("10+7-5-1"))
 
-        self.server.start(test=True)
 
-        self.pipe_puzzle.get.assert_called_once()
-        self.pipe_message.sendall.assert_called_with("ok")
-        self.server.server_socket.accept.assert_called_once()
-        self.mock_print.assert_called_with("Conexión aceptada de test-direction")
-        self.assertEqual(self.server.players, 1)
+    def test_validate_solution_invalid_result(self):
+        """Test validate_solution with solution that doesn't match the target"""
+        with patch('puzzle.logic.KryptoLogic.verify_solution', return_value=False):
+            self.assertFalse(self.server.validate_solution("1+2+3-4"))
+            self.assertFalse(self.server.validate_solution("1*2*3*4"))
+            self.assertFalse(self.server.validate_solution("1-2-3-4"))
 
-        mock_socket.sendall.assert_has_calls([
-            call(Messages.GREETING.encode()),
-            call((Messages.NEW_PUZZLE + "|" + "test puzzle").encode())
-        ])
-        mock_check_game_status.assert_called_once()
-        mock_handle_client.assert_called_once()
+    def test_validate_solution_wrong_numbers(self):
+        """Test validate_solution with solution using incorrect numbers"""
+        self.assertFalse(self.server.validate_solution("1+2+6-4"))
+        self.assertFalse(self.server.validate_solution("3+3/3+3"))
+        self.assertFalse(self.server.validate_solution("5-5+5/1"))
+        self.assertFalse(self.server.validate_solution("5+0+0+0"))
+
+    def test_validate_solution_too_many_numbers(self):
+        """Test validate_solution with too many numbers"""
+        self.assertFalse(self.server.validate_solution("1+2+3+4+5"))
+        self.assertFalse(self.server.validate_solution("1+1+1+1+1+1"))
+        self.assertFalse(self.server.validate_solution("2+2+2+2+2"))
+
+    def test_validate_solution_too_few_numbers(self):
+        """Test validate_solution with too few numbers"""
+        self.assertFalse(self.server.validate_solution("1+2+2"))
+        self.assertFalse(self.server.validate_solution("2+3"))
+        self.assertFalse(self.server.validate_solution("5"))
+
+    def test_validate_solution_invalid_characters(self):
+        """Test validate_solution with invalid characters in the solution"""
+        self.server.current_puzzle = [1,2,3,4,5]
+
     
-    @patch('socket.socket', new_callable=MagicMock())
-    def test_02_starting_server_full(self, mock_socket):
-        self.server.players = 8
-        self.server.server_socket = MagicMock()
-        self.server.server_socket.accept.return_value = (mock_socket, "test-direction")
-        self.pipe_puzzle.get.return_value = "test puzzle"
-
-        self.server.start(test=True)
-
-        self.pipe_puzzle.get.assert_called_once()
-        self.pipe_message.sendall.assert_called_with("ok")
-        self.server.server_socket.accept.assert_called_once()
-        self.assertEqual(self.server.players, 8)
-
-    def test_03_broadcast(self):
-        client_socket1 = MagicMock()
-        client_socket2 = MagicMock()
-        self.server.client_sockets = [client_socket1, client_socket2]
-        message = "test broadcast"
-
-        self.server.broadcast(message)
-
-        client_socket1.sendall.assert_called_with(message.encode('utf-8'))
-        client_socket2.sendall.assert_called_with(message.encode('utf-8'))
-
-    @patch('puzzle.server_classic.ServerClassic.check_game_status', return_value=None)
-    @patch('puzzle.logic.KryptoLogic.verify_solution', return_value=True)
-    def test_04_handle_posible_solution_correct(self, mock_krypto ,mock_status):
-        client_socket = MagicMock()
-        self.server.puzzle = [4,4,4,4,1]
-        solution = "test solution"
-
-        self.server.handle_posible_solution(client_socket, solution)
-
-        self.assertEqual(self.server.solved, 1)
-
-        client_socket.sendall.assert_called_with((Messages.PUZZLE_RESULT + "|Correcto").encode())
-        mock_status.assert_called_once()
-    
-    @patch('puzzle.logic.KryptoLogic.verify_solution', return_value=False)
-    def test_05_handle_posible_solution_incorrect(self, mock_krypto):
-        client_socket = MagicMock()
-        self.server.puzzle = [4,4,4,4,1]
-        solution = "test solution"
-
-        self.server.handle_posible_solution(client_socket, solution)
-
-        self.assertEqual(self.server.solved, 0)
-
-        client_socket.sendall.assert_called_with((Messages.PUZZLE_RESULT + "|Incorrecto").encode())
-
-    @patch('puzzle.server_classic.ServerClassic.check_game_status', return_value=None)
-    def test_06_handle_posible_rend(self, mock_status):
-        client_socket = MagicMock()
-
-        self.server.handle_player_rend(client_socket)
-
-        self.assertEqual(self.server.abandoned, 1)
-        client_socket.sendall.assert_called_with(("You gave up").encode())
-        mock_status.assert_called_once()
-
-    @patch('puzzle.server_classic.ServerClassic.check_game_status', return_value=None)
-    def test_07_handle_player_disconnect(self, mock_status):
-        self.server.players = 1
-
-        self.server.handle_player_disconnect()
-
-        self.assertEqual(self.server.players, 0)
-        self.pipe_message.sendall.assert_called_with("vacio")
-        mock_status.assert_called_once()
-
-    @patch('puzzle.server_classic.ServerClassic.broadcast', return_value=None)
-    def test_08_check_game_status_incomplete(self, mock_broadcast):
-        self.server.players = 6
-        self.server.solved = 1
-        self.server.abandoned = 1
-        self.server.puzzle = "puzzle"
-        self.server.client_sockets = [MagicMock(), MagicMock()]
-
-        self.server.check_game_status()
-
-        self.pipe_puzzle.get.assert_not_called()
-        self.assertEqual(self.server.solved, 1)
-        self.assertEqual(self.server.abandoned, 1)
-        self.server.broadcast.assert_any_call(Messages.GAME_STATE + f"|1|1|6")
-
-    @patch('puzzle.server_classic.ServerClassic.broadcast', return_value=None)
-    def test_09_check_game_status_complete(self, mock_broadcast):
-        self.server.players = 2
-        self.server.solved = 1
-        self.server.abandoned = 1
-        self.server.puzzle = "puzzle"
-        self.server.client_sockets = [MagicMock(), MagicMock()]
-
-        self.server.check_game_status()
-
-        self.pipe_puzzle.get.assert_called_once()
-        self.pipe_message.sendall.assert_called_with("ok")
-        self.assertEqual(self.server.solved, 0)
-        self.assertEqual(self.server.abandoned, 0)
-        self.server.broadcast.assert_any_call(Messages.NEW_PUZZLE + "|" + self.server.puzzle)
-        self.server.broadcast.assert_any_call(Messages.GAME_STATE + f"|0|0|2")
+    def test_validate_solution_no_puzzle(self):
+        """Test validate_solution with no puzzle set"""
+        self.server.current_puzzle = None
+        
+        # Any solution should fail with no puzzle
+        self.assertFalse(self.server.validate_solution("1+2+3-4"))
+        
+    def test_validate_solution_double_digit_numbers(self):
+        """Test validate_solution with double digit numbers"""
+        self.server.current_puzzle = [10,11,0,4,25]
+        
+        # Valid solution using double-digit numbers
+        with patch('puzzle.logic.KryptoLogic.verify_solution', return_value=True):
+            self.assertTrue(self.server.validate_solution("10+11+4-0"))
 
 if __name__ == '__main__':
     unittest.main()

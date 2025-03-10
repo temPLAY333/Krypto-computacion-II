@@ -1,16 +1,16 @@
+import os
 import uuid
 import socket
 import asyncio
 import logging
 import threading
 import multiprocessing
-from queue import Queue, Empty
-from typing import Any, Dict, Optional
+from queue import Empty
+from typing import Any, Dict
 
 from common.logger import Logger
 from common.social import LogMessages as Logs
 from common.social import UserMainMessages as UM
-from common.social import InterfaceMessages as IM
 from common.social import MainServerMessages as SM
 from common.network import NetworkManager
 from common.communication import Communication
@@ -657,12 +657,18 @@ if __name__ == "__main__":
     parser.add_argument("--port", type=int, default=5000, help="Server port")
     
     args = parser.parse_args()
+
+    multiprocessing.set_start_method('spawn')
     
     main_server = MainServer(host=args.host, port=args.port, debug=args.debug)
     try:
         asyncio.run(main_server.start_main_server())
     except KeyboardInterrupt:
         logging.info("Server stopped by Admin")
+        os._exit(0)
+    except Exception as e:
+        logging.error(f"Server stopped due to error: {e}")
+        os._exit(1)
     finally:
         # Ensure clean shutdown
         loop = asyncio.new_event_loop()
